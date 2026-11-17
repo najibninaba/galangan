@@ -22,8 +22,28 @@ npm start       # one message per stdin line
 | Variable | Default | Meaning |
 |---|---|---|
 | `GALANGAN_HARNESS` | the first in `src/harnesses/index.ts` | Which harness to run |
-| `GALANGAN_MODEL` | `faux` | `faux`, or `<provider>/<model id>` for a pi-ai built-in provider, e.g. `anthropic/claude-opus-4-6` with `ANTHROPIC_API_KEY` |
+| `GALANGAN_MODEL` | `faux` | Offline `faux`; `real` selects `openai/gpt-6.1-terra`; or use `<provider>/<model id>` from pi-ai's built-in catalog |
+| `GALANGAN_THINKING` | `medium` for reasoning models, `off` otherwise | Pi thinking level; unsupported levels are configuration errors (exit 78), never silently clamped |
 | `GALANGAN_DATA` | `~/.galangan` | Store directory; each harness gets `<name>.sqlite`. The default is the same from any working directory |
+
+### Real models
+
+The default **real** model is OpenAI Terra 6.1 at `medium`. The no-configuration default stays `faux`, so a quick start
+does not spend money. Set `OPENAI_API_KEY` in the environment (an `sk-` API key), then run
+`GALANGAN_MODEL=real npm start -- 'Count one cup'`. Explicitly selecting `openai/gpt-6.1-terra` is equivalent.
+Other providers use their usual key variables, such as `ANTHROPIC_API_KEY`.
+
+The shell validates effort against the selected model's catalog, applies model and effort to the root on **every
+open**, then resumes work. Existing faux stores therefore switch to the requested real model without losing history.
+The stdin banner includes the configured effort. Effort changes use OpenAI Responses `configuration_update` items;
+Sign in with ChatGPT tokens reject those items, so use an API key for this path.
+
+`npm run smoke:real` is a separate, paid integration check (requires the environment key). It creates a fresh store
+under `.amp/in/orb-backup/`, runs Terra's tally tool, exits that Node process, reopens the same store in another process,
+checks the persisted count, and calls the Sol helper once. It also probes a change from medium to high effort on the
+existing transcript. It prints each committed generation's model, Pi and provider efforts, token usage and estimated
+USD cost, plus per-model totals from `harness.usage()`. Supply a fresh directory as `npm run smoke:real -- <directory>`
+to keep its store at a specific path. It refuses an existing smoke store. `npm test` remains faux-only with no network.
 
 Only `--init` creates a store. Any other run on a missing store exits 78 and names the path it looked for, so a wrong
 `GALANGAN_DATA` or working directory never starts the harness with an empty past. `--init` on an existing store says so
@@ -74,6 +94,23 @@ Without `create: true` a missing store fails with `StoreMissing`, as does a path
 another process has open fails with `StoreLocked`. `shell.harness` is the open Pi Harness, for anything the shell does
 not wrap (more conversations, `inspect`, `watch`).
 
+### Opt-in reasoning helper
+
+Add `helper()` from `src/kit/helper.ts` to a harness's `extensions` to offer `delegate({ task })`. It defaults to
+`openai/gpt-6.1-sol` at `high`; the OpenAI provider registered for Terra also registers Sol, using the same key.
+Sol returns findings to Terra, and Terra writes the user-facing answer; delegation never switches the root model.
+The example tally harness does not opt in, since counting is deterministic work.
+
+The foreground helper is task-owned and replay-safe, reusing its child and `subagent:<taskId>` request after a restart.
+It inherits the harness's other tools but not the helper extension, so it cannot delegate recursively. A persisted
+budget permits three helper calls per answer across rounds and parallel calls, including failed children; the next
+answer gets a fresh budget. Aborting the parent also aborts its helper. This prevents duplicate children/submissions,
+not duplicate provider billing if a crash interrupts a generation.
+
+For offline harness tests inject a registered faux model and its supported effort:
+`helper({ model: FAUX_MODEL, thinkingLevel: "off" })`. Tool arguments use closed pi-schema schemas: extra properties
+are errors, not silently removed.
+
 ## Layout
 
 | Path | Role |
@@ -83,9 +120,12 @@ not wrap (more conversations, `inspect`, `watch`).
 | `src/models.ts` | `GALANGAN_MODEL` → model; the deterministic faux model and its script format |
 | `src/main.ts` | CLI entry |
 | `src/harnesses/` | Harnesses this build ships; `tally` is the example |
+| `src/kit/helper.ts` | Opt-in bounded foreground helper (Sol high by default) |
 | `test/shell.test.ts` | The shell over a real SQLite file: tool state across a reopen, request ID dedup, missing and locked stores, model choice |
 | `test/store.test.ts` | The CLI as processes: one default store from any directory, `--init` (once), the old `./data` hint, a second process refused |
 | `test/main.test.ts` | The CLI as a child process: an unanswered line does not end the session; SIGINT/SIGTERM close the Harness |
+| `test/helper.test.ts` | Faux-only helper findings, limits, no recursion and restart recovery |
+| `test/real-model-smoke.ts` | Paid OpenAI probe; only run by `npm run smoke:real`, not `npm test` |
 
 ## Pins
 

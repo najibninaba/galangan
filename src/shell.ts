@@ -15,11 +15,12 @@ import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { openNodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { AssistantEntry, createRegistry, Harness, type ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { Context, Data, Effect, Layer, Predicate, Schedule } from "effect";
 import type { HarnessSpec } from "./harness.ts";
-import type { ModelChoice } from "./models.ts";
+import { chooseThinking, type ModelChoice } from "./models.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -59,6 +60,7 @@ export type ShellOptions = {
 export class Shell extends Context.Service<Shell, {
 	readonly name: string;
 	readonly model: ModelRef;
+	readonly thinkingLevel: ModelThinkingLevel;
 	/** The open Pi Harness, for anything the shell does not wrap (other conversations, inspect, watch). */
 	readonly harness: Harness;
 	/** Submit `content` to the root conversation and wait for its answer text. A repeated `requestId` is one input. */
@@ -70,6 +72,7 @@ export class Shell extends Context.Service<Shell, {
 			const found = statSync(store, { throwIfNoEntry: false });
 			if (found !== undefined && !found.isFile()) return yield* new StoreMissing({ store, notFile: true });
 			if (!create && found === undefined) return yield* new StoreMissing({ store });
+			const thinkingLevel = yield* chooseThinking(choice);
 			const harness = yield* Effect.acquireRelease(
 				Effect.tryPromise({ try: () => open(spec, choice, store), catch: (error) => error }).pipe(
 					// SQLITE_BUSY: another connection holds the lock. node:sqlite reports extended codes, such as
@@ -90,8 +93,10 @@ export class Shell extends Context.Service<Shell, {
 				// close() writes running tasks back as pending without counting a restart; a hard kill counts one.
 				(harness) => Effect.promise(() => harness.close(context)),
 			);
+			const root = yield* Effect.promise(() => harness.root(context));
+			// root({ agent }) only configures a new conversation. Reconfigure before resuming existing work too.
+			yield* Effect.promise(() => root.configure({ model: choice.model, thinkingLevel }, context));
 			harness.resume();
-			const root = yield* Effect.promise(() => harness.root(context, { agent: { model: choice.model } }));
 			const ask = (content: string, options: { readonly requestId?: string } = {}) =>
 				Effect.gen(function* () {
 					const submission = yield* Effect.promise(() => root.submit({ type: "input", content, ...options }, context));
@@ -107,7 +112,7 @@ export class Shell extends Context.Service<Shell, {
 						.join("")
 						.trim();
 				});
-			return { name: spec.name, model: choice.model, harness, ask };
+			return { name: spec.name, model: choice.model, thinkingLevel, harness, ask };
 		}));
 }
 

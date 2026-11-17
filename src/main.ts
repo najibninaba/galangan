@@ -43,7 +43,7 @@ const run = Effect.gen(function* () {
 	});
 	const message = process.argv.slice(2).join(" ");
 	if (message !== "") return console.log(yield* shell.ask(message));
-	console.error(`galangan: ${shell.name} on ${shell.model.provider}/${shell.model.modelId}; one message per line`);
+	console.error(`galangan: ${shell.name} on ${shell.model.provider}/${shell.model.modelId} (${shell.thinkingLevel}); one message per line`);
 	// Closed with the scope, so an interrupted loop releases stdin and the process can exit.
 	const readline = yield* Effect.acquireRelease(
 		Effect.sync(() => createInterface({ input: process.stdin })),
@@ -77,7 +77,7 @@ if (init && process.argv.length > 3) {
 }
 
 const program = Effect.gen(function* () {
-	const choice = yield* chooseModel(process.env.GALANGAN_MODEL);
+	const choice = yield* chooseModel(process.env.GALANGAN_MODEL, process.env.GALANGAN_THINKING);
 	const store = join(process.env.GALANGAN_DATA ?? join(homedir(), ".galangan"), `${harness.name}.sqlite`);
 	// Opening an existing store resumes its unfinished runs, which --init must not start.
 	if (init && statSync(store, { throwIfNoEntry: false })?.isFile()) {

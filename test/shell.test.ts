@@ -4,9 +4,12 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, type TestContext } from "node:test";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { Effect } from "effect";
 import { tallyHarness } from "../src/harnesses/tally.ts";
-import { chooseModel, fauxModels, FAUX_MODEL, InvalidModel } from "../src/models.ts";
+import { chooseModel, chooseThinking, fauxModels, FAUX_MODEL, InvalidModel } from "../src/models.ts";
 import { Shell, StoreLocked, StoreMissing } from "../src/shell.ts";
 
 function tempStore(t: TestContext): string {
@@ -73,11 +76,57 @@ describe("shell", () => {
 		assert.ok(second.ms < 1000, `refused after ${second.ms} ms`);
 		assert.equal(await withShell(store, Shell.use((shell) => shell.ask('call tally {"label":"cups"}'))), "tally: cups = 2");
 	});
+
+	it("applies model and effort changes to an existing root before its next generation", async (t) => {
+		const store = tempStore(t);
+		await withShell(store, Shell.use((shell) => shell.ask('call tally {"label":"cups"}')), true);
+		const faux = fauxProvider({ models: [{ id: "replacement", reasoning: true }] });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		faux.setResponses([(context, options, _state, model) => {
+			assert.equal(model.id, "replacement");
+			assert.equal(options?.reasoning, "high");
+			assert.ok(context.messages.some((message) => message.role === "toolResult"));
+			return fauxAssistantMessage("new model, preserved history");
+		}]);
+		await Effect.runPromise(Effect.provide(Shell.use((shell) => shell.ask("hello again")), Shell.layer({
+			harness: tallyHarness, store,
+			choice: { models, model: { provider: "faux", modelId: "replacement" }, thinkingLevel: "high" },
+		})));
+		// Changing effort alone must also replace the persisted value, not just print a new banner.
+		faux.setResponses([(_context, options) => {
+			assert.equal(options?.reasoning, "low");
+			return fauxAssistantMessage("lower effort");
+		}]);
+		const answer = await Effect.runPromise(Effect.provide(Shell.use((shell) => shell.ask("one more")), Shell.layer({
+			harness: tallyHarness, store,
+			choice: { models, model: { provider: "faux", modelId: "replacement" }, thinkingLevel: "low" },
+		})));
+		assert.equal(answer, "lower effort");
+	});
 });
 
 describe("chooseModel", () => {
 	it("defaults to the faux model", async () => {
 		assert.deepEqual((await Effect.runPromise(chooseModel())).model, FAUX_MODEL);
+	});
+
+	it("defaults reasoning models to medium and rejects unknown or unsupported levels", async () => {
+		const faux = fauxProvider({ models: [{ id: "reasoner", reasoning: true }] });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const choice = { models, model: { provider: "faux", modelId: "reasoner" } };
+		assert.equal(await Effect.runPromise(chooseThinking(choice)), "medium");
+		assert.equal(await Effect.runPromise(chooseThinking(choice, "high")), "high");
+		for (const level of ["xhigh", "typo", ""]) {
+			assert.ok(await Effect.runPromise(Effect.flip(chooseThinking(choice, level))) instanceof InvalidModel);
+		}
+		assert.ok(await Effect.runPromise(Effect.flip(chooseModel("faux", "medium"))) instanceof InvalidModel);
+		// Catalog-only validation: no authentication or network. Sol cannot run with Pi's old default of off.
+		models.setProvider(openaiProvider());
+		const sol = { models, model: { provider: "openai", modelId: "gpt-6.1-sol" } };
+		assert.ok(await Effect.runPromise(Effect.flip(chooseThinking(sol, "off"))) instanceof InvalidModel);
+		assert.equal(await Effect.runPromise(chooseThinking(sol, "high")), "high");
 	});
 
 	it("refuses a spec without a provider and model", async () => {

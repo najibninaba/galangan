@@ -4,15 +4,20 @@
 // layer's scope ends. The store survives the process: a reopen finds the same root conversation, and `resume()`
 // continues any run the last process left unfinished.
 //
-// One process owns a store at a time; Pi has no cross-process lock. Lunas adds a writer lease for that (its
-// src/lease.ts); add one here before running two shells against one directory.
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+// One process owns a store at a time. Pi has no cross-process lock, so `open()` holds SQLite's exclusive lock for the
+// connection's life: a second process fails at once with `StoreLocked` instead of resuming the same tasks, and the OS
+// drops the lock when the owner dies, so a crash leaves no stale lease. It also shuts out read-only viewers; if those
+// are needed, port Lunas's writer lease (its src/lease.ts) instead.
+//
+// Only an explicit `create` makes a store. Otherwise a missing file is `StoreMissing`: a mistyped path or another
+// working directory must not open an empty store and start the harness with no past (optmem's `memo init` rule).
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { openNodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
 import { AssistantEntry, createRegistry, Harness, type ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Predicate, Schedule } from "effect";
 import type { HarnessSpec } from "./harness.ts";
 import type { ModelChoice } from "./models.ts";
 
@@ -25,11 +30,27 @@ export class Unanswered extends Data.TaggedError("Unanswered")<{ readonly reason
 	}
 }
 
+/** No SQLite file at `store`, and the shell was not asked to create one. */
+export class StoreMissing extends Data.TaggedError("StoreMissing")<{ readonly store: string }> {
+	override get message() {
+		return `no store at ${resolve(this.store)}; create it with --init, or point GALANGAN_DATA at the one you have`;
+	}
+}
+
+/** Another process has `store` open. */
+export class StoreLocked extends Data.TaggedError("StoreLocked")<{ readonly store: string }> {
+	override get message() {
+		return `store ${resolve(this.store)} is in use by another process`;
+	}
+}
+
 export type ShellOptions = {
 	readonly harness: HarnessSpec;
 	readonly choice: ModelChoice;
-	/** SQLite file; its directory is created. */
+	/** SQLite file. */
 	readonly store: string;
+	/** Create `store` and its directory when missing; otherwise a missing store is `StoreMissing`. */
+	readonly create?: boolean;
 };
 
 export class Shell extends Context.Service<Shell, {
@@ -40,10 +61,26 @@ export class Shell extends Context.Service<Shell, {
 	/** Submit `content` to the root conversation and wait for its answer text. A repeated `requestId` is one input. */
 	readonly ask: (content: string, options?: { readonly requestId?: string }) => Effect.Effect<string, Unanswered>;
 }>()("galangan/Shell") {
-	static layer = ({ harness: spec, choice, store }: ShellOptions) =>
+	static layer = ({ harness: spec, choice, store, create = false }: ShellOptions) =>
 		Layer.effect(Shell, Effect.gen(function* () {
+			if (!create && !existsSync(store)) return yield* new StoreMissing({ store });
 			const harness = yield* Effect.acquireRelease(
-				Effect.promise(() => open(spec, choice, store)),
+				Effect.tryPromise({ try: () => open(spec, choice, store), catch: (error) => error }).pipe(
+					// SQLITE_BUSY: another connection holds the lock. node:sqlite reports extended codes, such as
+					// SQLITE_BUSY_RECOVERY (261) while a crashed store's WAL is recovered, so compare the primary code.
+					// Anything else is a defect, as before.
+					Effect.catch((error) => Predicate.hasProperty(error, "errcode") && (Number(error.errcode) & 0xff) === 5
+						? Effect.fail(new StoreLocked({ store }))
+						: Effect.die(error)),
+					// Two processes starting together both hold WAL's shared lock while each asks for the exclusive one,
+					// so both can be refused and leave the store with no owner. A failed open has closed its connection,
+					// so a jittered retry lets one win; a real owner still refuses within about half a second.
+					Effect.retry({
+						while: (error) => error instanceof StoreLocked,
+						schedule: Schedule.jittered(Schedule.spaced("100 millis")),
+						times: 3,
+					}),
+				),
 				// close() writes running tasks back as pending without counting a restart; a hard kill counts one.
 				(harness) => Effect.promise(() => harness.close(context)),
 			);
@@ -69,13 +106,23 @@ export class Shell extends Context.Service<Shell, {
 }
 
 async function open(spec: HarnessSpec, choice: ModelChoice, store: string): Promise<Harness> {
-	mkdirSync(dirname(store), { recursive: true });
 	const registry = createRegistry();
 	for (const extension of spec.extensions) registry.install(extension);
-	// Pi's Node SQLite storage runs WAL with `synchronous = NORMAL`, which can lose the newest commits on power loss.
-	// FULL fsyncs every commit (lunas measured about +0.5 ms). It is per connection: set it on the one Pi uses.
-	const db = await openNodeSqliteDatabase(store);
-	await db.exec("PRAGMA synchronous = FULL");
+	// No busy timeout: the owner holds the lock alone, so a wait would only delay a second process's refusal (chord's
+	// default is 5 s). The open creates a missing file and directory; Shell.layer has already checked `create`.
+	const db = await openNodeSqliteDatabase(store, { busyTimeoutMs: 0 });
+	try {
+		// Pi's Node SQLite storage runs WAL with `synchronous = NORMAL`, which can lose the newest commits on power
+		// loss. FULL fsyncs every commit (lunas measured about +0.5 ms). It is per connection: set it on the one Pi uses.
+		await db.exec("PRAGMA synchronous = FULL");
+		// EXCLUSIVE keeps the lock after the first write until close; the empty write transaction takes it now, before
+		// Pi reads or resumes anything, and also refuses readers.
+		await db.exec("PRAGMA locking_mode = EXCLUSIVE");
+		await db.transaction(async () => {});
+	} catch (error) {
+		await db.close().catch(() => {});
+		throw error;
+	}
 	return Harness.open(await SqliteStorage.open(db), {
 		models: choice.models,
 		registry,

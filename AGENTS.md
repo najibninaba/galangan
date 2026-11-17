@@ -2,6 +2,13 @@
 
 A harness app shell on Pi Durable and Effect. Read `README.md` first for the layout and the harness extension point.
 
+## Before you start
+
+- Search this project's earlier Amp threads (`find_thread`) and Linear for the same or related work. Build on the
+  decisions and open issues you find instead of redoing or contradicting them, and cite the thread or issue.
+- Name the general problem behind the request and solve that, not only the instance reported. If the fix belongs in
+  a shared layer, such as `src/shell.ts` or a Pi or Effect service, say so.
+
 ## Commands
 
 - `npm ci` (orbs run `.agents/setup`), then `npm run check` (tsc, no emit) and `npm test` (node --test). Run both

@@ -15,8 +15,8 @@ minor can break its API, and its store migrations are one-way, so Galangan's ver
 ## 2. Release lines
 
 - Galangan follows every Pi minor. Harnesses may lag behind by staying on an older Galangan line.
-- One Galangan minor line per Pi minor: 0.1.x is Pi 1.5.x. The next Pi minor (1.6) opens 0.2.0, and so on. Before
-  1.0, a Galangan minor may also break the shell's own API.
+- Every Pi minor opens a new Galangan minor line, and a line never spans two Pi minors. Before 1.0, a breaking change
+  to the shell's own API also opens a new minor on the same Pi: 0.1.x and 0.2.x are Pi 1.5.x.
 - Shell fixes and Pi patch bumps ship as patch releases on the newest line only. There are no backports to older lines;
   a harness that needs a fix moves to the newest line.
 - Every release is a commit that sets `package.json` `version` (and `WRITER` in `src/shell.ts`, which a test keeps

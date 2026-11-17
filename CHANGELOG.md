@@ -3,10 +3,25 @@
 Each release says whether it migrates the store and gives a `Migration:` line for every change harness code must
 make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for release lines and how to upgrade.
 
-## Unreleased
+## 0.2.0 - 2026-11-17
+
+Galangan as a package other harness repos build on: they install it from this repository at the `v0.2.0` tag, import
+only `galangan` and `galangan/testing`, and run its conformance cases against their own harness. Still on Pi Durable
+1.5.2 and Effect 4.1.4; the shell's API changed, so this opens the 0.2 line, which also follows Pi 1.5.
 
 Store: no Pi migration; Pi stays at 1.5.2 (schema 2). Galangan adds its `galangan_store` stamp table on the first
-open, after backing the store up. Existing tally counts are not carried over (see Changed).
+open, after copying the store to `<store>.<UTC time>.bak`. Treat that as one-way: 0.1.0 does not check the stamp, so
+roll back by restoring the backup, not by running 0.1.0 on the stamped store. Existing tally counts are not carried
+over (see Changed).
+
+Upgrading from 0.1.0:
+
+1. Depend on `galangan@git+https://ampcode.com/@najib/galangan.git#v0.2.0` and add Pi (`pi-durable`, `pi-ai`, `chord`,
+   `pi-schema` 1.5.2) and `effect` 4.1.4 as your own exact dependencies; they are peers now.
+2. Import from `galangan` and `galangan/testing` only, and call `runCli([...])` from the harness's entry point.
+3. Rename any `galangan.*` doc kinds, extension names and `galangan_*` tool names to the harness's own prefix.
+4. Add `conformance(myHarness)` to the harness's tests, and run it against a backup of the store before deploying.
+5. Expect one backup beside the store on the first open; later opens of a stamped store make none.
 
 ### Added
 
@@ -32,8 +47,9 @@ open, after backing the store up. Existing tally counts are not carried over (se
   `GALANGAN_HARNESS` picks among the harnesses passed, defaulting to the first.
 - Pi (`pi-durable`, `pi-ai`, `chord`, `pi-schema`) and Effect are exact `peerDependencies`, so a harness cannot load a
   second copy.
-- Harness repos install Galangan as a git dependency pinned to a commit (BIJAN-148). `prepare` builds `dist/` (JS and
-  `.d.ts`) on install, since Node does not strip types under `node_modules`; `exports` points there by default.
+- Harness repos install Galangan as a git dependency pinned to a release tag or commit (BIJAN-148). `prepare` builds
+  `dist/` (JS and `.d.ts`) on install, since Node does not strip types under `node_modules`; `exports` points there by
+  default.
   Galangan's own npm scripts use the `galangan-source` condition, so its runs and tests still need no build.
   Migration: run files in this repository through the npm scripts, or with `node --conditions=galangan-source`.
 

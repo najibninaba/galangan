@@ -19,4 +19,5 @@ it("counts per label and keeps counts across a reopen", async (t) => {
 	assert.equal(await ask(store, 'call tally {"label":"cups"}'), "tally: cups = 2");
 });
 
-conformance(tallyHarness);
+// `CONFORMANCE_FROM=<store backup> npm test` runs the cases on copies of that backup before an upgrade.
+conformance(tallyHarness, { from: process.env.CONFORMANCE_FROM });

@@ -91,11 +91,24 @@ A harness imports Galangan only through its two public entries: `galangan` (the 
 Everything else under `src/` is internal; `exports` in `package.json` refuses deep imports.
 [`examples/tally/`](examples/tally) is the reference harness and follows that rule (a test checks it).
 
-1. Copy [`examples/tally/`](examples/tally) for your harness: `tally.ts`, `main.ts` and `tally.test.ts`.
+A new harness repo starts as a copy of [`template/`](template): this release's pins, the tsconfig, an AGENTS.md
+with these conventions, `.agents/setup`, `npm run ci` (check, then test with conformance) and tally as its starting
+harness in `src/`. Copy it from the release tag it pins, not from `main`: between releases `main` can carry peers or
+shell API that the last tag lacks. Copy `template/.`, not `template/*`, so the dotfiles (`.npmrc`, `.gitignore`,
+`.agents/`) come too. Then run `.agents/setup` and commit the `package-lock.json` its first install writes:
+
+```sh
+git clone --quiet --depth 1 --branch v<version> https://ampcode.com/@najib/galangan.git /tmp/galangan
+mkdir my-harness && cp -r /tmp/galangan/template/. my-harness/
+cd my-harness && git init && ./.agents/setup && npm run ci
+```
+
+1. Start from tally in the template's `src/` (or copy [`examples/tally/`](examples/tally): `tally.ts`, `main.ts` and
+   `tally.test.ts`), and rename it to your harness.
 2. Put your tools, sections, hooks and tasks in its extensions, and give it a name with `defineHarness`.
 3. `main.ts` passes your harnesses to `runCli([...])`, which is the whole CLI above; `GALANGAN_HARNESS` picks among
    them.
-4. Keep `conformance(myHarness)` in its test, as `tally.test.ts` does.
+4. Keep `conformance(myHarness, { from: process.env.CONFORMANCE_FROM })` in its test, as `tally.test.ts` does.
 
 `conformance(spec)` from `galangan/testing` registers the shell's durability promise as node:test cases over real
 SQLite and the faux model, run through your harness's own extensions plus a probe extension: committed tool state
@@ -200,6 +213,7 @@ are errors, not silently removed.
 | `tsconfig.build.json` | `npm run build` (run by `prepare`): `src/` to `dist/` JS and `.d.ts`, what `exports` gives other repos |
 | `src/cli.ts` | `runCli(harnesses)`: the CLI, harness selection, exit codes and signals |
 | `examples/tally/` | The reference harness: `tally.ts`, its CLI `main.ts` (`npm start`) and its test, on public entries only |
+| `template/` | The starter a new harness repo copies: pins, tsconfig, AGENTS.md, `.agents/setup` and tally in `src/` |
 | `src/helper.ts` | Opt-in bounded foreground helper (Sol high by default) |
 | `test/shell.test.ts` | The shell over a real SQLite file: missing and locked stores, model changes, the stamp and backups, model choice |
 | `test/conformance.test.ts` | `conformance` on a copy of an existing store, which it leaves untouched (tally's own test runs it on new stores) |
@@ -207,6 +221,7 @@ are errors, not silently removed.
 | `test/main.test.ts` | The CLI as a child process: an unanswered line does not end the session; SIGINT/SIGTERM close the Harness |
 | `test/helper.test.ts` | Faux-only helper findings, limits, no recursion and restart recovery |
 | `test/boundary.test.ts` | Examples import only the public entries |
+| `test/template.test.ts` | `template/` carries examples/tally unchanged and this release's tag, pins and compiler options |
 | `test/real-model-smoke.ts` | Paid OpenAI probe; only run by `npm run smoke:real`, not `npm test` |
 | `test/real-model-recovery.ts` | Paid, gated SIGKILL/reopen experiment; only run by `npm run smoke:recovery` |
 

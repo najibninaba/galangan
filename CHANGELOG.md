@@ -3,6 +3,21 @@
 Each release says whether it migrates the store and gives a `Migration:` line for every change harness code must
 make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for release lines and how to upgrade.
 
+## Unreleased
+
+### Added
+
+- Starter template (BIJAN-152): `template/` is what a new harness repo copies. It pins Galangan to this release's tag
+  with the exact peers, keeps the erasable-syntax tsconfig with `skipLibCheck`, carries Galangan's conventions in
+  AGENTS.md, runs check and test (with conformance) as `npm run ci`, and starts from tally in `src/`. Tests keep it
+  equal to `examples/tally` and to this release's tag, pins and compiler options. Copy it from the release tag it
+  pins, not from `main`; the README gives the commands. There is no CI workflow: ampcode.com has no CI runner, and a
+  GitHub runner has no Amp git credentials to install Galangan.
+- `examples/tally`'s test passes `from: process.env.CONFORMANCE_FROM` to `conformance`, as the README recommends, so
+  `CONFORMANCE_FROM=<backup> npm test` works in a repo made from the template without an edit.
+
+Migration: none.
+
 ## 0.2.0 - 2026-11-17
 
 Galangan as a package other harness repos build on: they install it from this repository at the `v0.2.0` tag, import

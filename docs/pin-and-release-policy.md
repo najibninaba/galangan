@@ -19,8 +19,8 @@ minor can break its API, and its store migrations are one-way, so Galangan's ver
   to the shell's own API also opens a new minor on the same Pi: 0.1.x and 0.2.x are Pi 1.5.x.
 - Shell fixes and Pi patch bumps ship as patch releases on the newest line only. There are no backports to older lines;
   a harness that needs a fix moves to the newest line.
-- Every release is a commit that sets `package.json` `version` (and `WRITER` in `src/shell.ts`, which a test keeps
-  equal), adds a `CHANGELOG.md` entry, and carries an annotated
+- Every release is a commit that sets `package.json` `version` (and `WRITER` in `src/shell.ts` and the Galangan tag in
+  `template/package.json`, which tests keep equal), adds a `CHANGELOG.md` entry, and carries an annotated
   tag `v<version>` on `main`. `npm run check` and `npm test` pass on that commit.
 
 ## 3. Release notes

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Prepares a fresh Amp orb for this harness: checks Node and installs npm dependencies. Galangan comes from its git
+# repository on ampcode.com, which an orb's Amp git credentials can read.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+step() { printf '\n==> %s\n' "$*"; }
+timed() { local start=$SECONDS; "$@"; printf '    (%ss)\n' "$((SECONDS - start))"; }
+
+step "Check Node (package.json engines: >=26.12.0)"
+node -e '
+  const [maj, min] = process.versions.node.split(".").map(Number);
+  if (maj < 26 || (maj === 26 && min < 12)) {
+    console.error(`Node ${process.version} is too old; this harness needs >=26.12.0`);
+    process.exit(1);
+  }
+  console.log(`    node ${process.version}`);
+'
+
+if [[ ! -f package-lock.json ]]; then
+  # A repo just made from the template: this writes the lockfile to commit.
+  step "npm install (no package-lock.json yet)"
+  timed npm install --no-audit --no-fund
+elif [[ -d node_modules ]]; then
+  # Warm snapshot: npm install confirms node_modules matches the lockfile in well under a second.
+  step "npm install (node_modules restored from snapshot)"
+  timed npm install --no-audit --no-fund --prefer-offline
+else
+  step "npm ci"
+  timed npm ci --no-audit --no-fund --prefer-offline
+fi

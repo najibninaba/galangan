@@ -48,6 +48,18 @@ provider efforts, token usage and estimated USD cost, plus per-model totals from
 Supply a fresh directory as `npm run smoke:real -- <directory>`
 to keep its store at a specific path. It refuses an existing smoke store. `npm test` remains faux-only with no network.
 
+`npm run smoke:recovery` is a separate paid SIGKILL experiment on four fresh temporary stores: during Terra streaming,
+after a tally increment but before its result commits, during Sol streaming, and after Sol's answer commits but before
+delegate's result commits. A parent process verifies each boundary, sends SIGKILL, then reopens in another process.
+Smoke-only hooks force the initial tool call, not the model's response to an interrupted tool. Production retry policy
+is unchanged (Pi 1.5.2 defaults to three retries). The script reports outcomes rather than assuming every crash answers.
+It writes `events.jsonl` and `summary.json` beside its temporary stores, including request counts, stored generations
+(also aborted), tool errors, budgets, task restarts, reports and usage. It caps each request at 1,024 output tokens and
+reserves estimated input plus maximum output cost before dispatch, stopping before reservations exceed $0.25.
+Killed requests can cost money without recorded usage; the printed Pi cost is not an invoice. A stream gate proves
+the host was still consuming the response, not that OpenAI had not finished generating server-side. An optional fresh
+directory works as for `smoke:real`; keep transcripts outside the checkout.
+
 Only `--init` creates a store. Any other run on a missing store exits 78 and names the path it looked for, so a wrong
 `GALANGAN_DATA` or working directory never starts the harness with an empty past. `--init` on an existing store says so
 and leaves it unopened, so it never resumes that store's unfinished runs. `--init` takes no other arguments, and a store
@@ -134,6 +146,7 @@ are errors, not silently removed.
 | `test/main.test.ts` | The CLI as a child process: an unanswered line does not end the session; SIGINT/SIGTERM close the Harness |
 | `test/helper.test.ts` | Faux-only helper findings, limits, no recursion and restart recovery |
 | `test/real-model-smoke.ts` | Paid OpenAI probe; only run by `npm run smoke:real`, not `npm test` |
+| `test/real-model-recovery.ts` | Paid, gated SIGKILL/reopen experiment; only run by `npm run smoke:recovery` |
 
 ## Pins
 

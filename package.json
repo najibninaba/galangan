@@ -12,7 +12,8 @@
     "start": "node src/main.ts",
     "check": "tsc -p .",
     "test": "node --test --test-reporter=spec \"test/**/*.test.ts\"",
-    "smoke:real": "node test/real-model-smoke.ts"
+    "smoke:real": "node test/real-model-smoke.ts",
+    "smoke:recovery": "node test/real-model-recovery.ts"
   },
   "dependencies": {
     "@earendil-works/chord": "1.5.2",

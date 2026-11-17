@@ -162,6 +162,9 @@ takes one `Report` tagged by `kind`, `harness.closed` ends with `{ kind }`, and 
 replaced by watches. Port a Lunas extension with those in mind. Pi Durable breaks its API every minor release and its
 store migrations are one-way, so read its `CHANGELOG.md` before a bump.
 
+Releases follow [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md): one Galangan minor line per Pi minor
+(0.1.x is Pi 1.5.x), fixes on the newest line only, and a `CHANGELOG.md` entry that says whether the store migrates.
+
 ## Limits
 
 - One process per store, enforced: the shell holds SQLite's exclusive lock while open, so a second process exits 75

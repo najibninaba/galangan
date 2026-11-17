@@ -5,7 +5,7 @@
 // src/models.ts; default the faux model), GALANGAN_DATA (store directory; default ~/.galangan from any directory).
 // Exit codes: 0 done, 1 failed (restart it), 75 store in use by another process, 78 bad configuration (needs a person),
 // 130/143 stopped by SIGINT/SIGTERM after closing the Harness.
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -70,13 +70,19 @@ if (harness === undefined) {
 	console.error(`galangan: unknown harness ${name}; this build has ${harnesses.map((h) => h.name).join(", ")}`);
 	process.exit(EXIT_CONFIG);
 }
+const init = process.argv[2] === "--init";
+if (init && process.argv.length > 3) {
+	console.error(`galangan: --init takes no other arguments; got ${process.argv.slice(3).join(" ")}`);
+	process.exit(EXIT_CONFIG);
+}
 
 const program = Effect.gen(function* () {
 	const choice = yield* chooseModel(process.env.GALANGAN_MODEL);
 	const store = join(process.env.GALANGAN_DATA ?? join(homedir(), ".galangan"), `${harness.name}.sqlite`);
-	const init = process.argv[2] === "--init";
 	// Opening an existing store resumes its unfinished runs, which --init must not start.
-	if (init && existsSync(store)) return console.error(`galangan: store already exists at ${resolve(store)}`);
+	if (init && statSync(store, { throwIfNoEntry: false })?.isFile()) {
+		return console.error(`galangan: store already exists at ${resolve(store)}`);
+	}
 	const ready = Effect.sync(() => console.error(`galangan: store ready at ${resolve(store)}`));
 	yield* Effect.provide(init ? ready : Effect.scoped(run), Shell.layer({ harness, choice, store, create: init }));
 });
@@ -88,10 +94,12 @@ Effect.runPromise(program, { signal: stop.signal }).then(
 	(error: unknown) => {
 		if (signalled !== undefined) return void (process.exitCode = SIGNAL_EXIT[signalled]);
 		console.error(`galangan: ${error instanceof Error ? error.message : String(error)}`);
-		// The default was ./data before ~/.galangan; point an upgrade at its history instead of at an empty --init.
-		const legacy = resolve("data", `${harness.name}.sqlite`);
-		if (error instanceof StoreMissing && process.env.GALANGAN_DATA === undefined && existsSync(legacy)) {
-			console.error(`galangan: found a store at ${legacy} (the old default); run with GALANGAN_DATA=${resolve("data")}`);
+		if (error instanceof StoreMissing && error.notFile !== true) {
+			// The default was ./data before ~/.galangan; point an upgrade at its history instead of at an empty --init.
+			const legacy = resolve("data", `${harness.name}.sqlite`);
+			console.error(process.env.GALANGAN_DATA === undefined && existsSync(legacy)
+				? `galangan: found a store at ${legacy} (the old default); run with GALANGAN_DATA=${resolve("data")}`
+				: "galangan: create it with --init, or point GALANGAN_DATA at the one you have");
 		}
 		process.exitCode = error instanceof StoreLocked
 			? EXIT_LOCKED

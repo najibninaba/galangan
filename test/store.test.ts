@@ -35,7 +35,9 @@ describe("store", () => {
 
 		const missing = await cli(env, a, 'call tally {"label":"cups"}');
 		assert.equal(missing.code, 78);
-		assert.match(missing.stderr, new RegExp(`no store at ${store}`));
+		assert.match(missing.stderr, new RegExp(`no store at ${store}\ngalangan: create it with --init`));
+		// Extra words would otherwise be dropped silently, or a message starting with --init lost.
+		assert.equal((await cli(env, a, "--init", "hello")).code, 78);
 		assert.equal(existsSync(store), false);
 
 		assert.equal((await cli(env, a, "--init")).code, 0);
@@ -55,6 +57,16 @@ describe("store", () => {
 		assert.equal(missing.code, 78);
 		assert.match(missing.stderr, new RegExp(`found a store at ${join(dir, "data", "tally.sqlite")}`));
 		assert.equal(existsSync(join(dir, ".galangan")), false);
+	});
+
+	it("refuses a store path that is not a file, with or without --init", async (t) => {
+		const { dir, env } = home(t);
+		const store = join(dir, ".galangan", "tally.sqlite");
+		mkdirSync(store, { recursive: true });
+		for (const args of [["--init"], ['call tally {"label":"cups"}']]) {
+			const run = await cli(env, dir, ...args);
+			assert.deepEqual([run.code, run.stderr], [78, `galangan: ${store} is not a store file\n`], args.join(" "));
+		}
 	});
 
 	it("refuses a second process while one has the store open, and serves the next one after it exits", async (t) => {

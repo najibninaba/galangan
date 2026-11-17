@@ -11,7 +11,7 @@
 //
 // Only an explicit `create` makes a store. Otherwise a missing file is `StoreMissing`: a mistyped path or another
 // working directory must not open an empty store and start the harness with no past (optmem's `memo init` rule).
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { openNodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
@@ -30,10 +30,13 @@ export class Unanswered extends Data.TaggedError("Unanswered")<{ readonly reason
 	}
 }
 
-/** No SQLite file at `store`, and the shell was not asked to create one. */
-export class StoreMissing extends Data.TaggedError("StoreMissing")<{ readonly store: string }> {
+/** No SQLite file at `store`: nothing is there and the shell was not asked to create one, or a non-file is (`notFile`). */
+export class StoreMissing extends Data.TaggedError("StoreMissing")<{
+	readonly store: string;
+	readonly notFile?: boolean;
+}> {
 	override get message() {
-		return `no store at ${resolve(this.store)}; create it with --init, or point GALANGAN_DATA at the one you have`;
+		return this.notFile ? `${resolve(this.store)} is not a store file` : `no store at ${resolve(this.store)}`;
 	}
 }
 
@@ -63,7 +66,10 @@ export class Shell extends Context.Service<Shell, {
 }>()("galangan/Shell") {
 	static layer = ({ harness: spec, choice, store, create = false }: ShellOptions) =>
 		Layer.effect(Shell, Effect.gen(function* () {
-			if (!create && !existsSync(store)) return yield* new StoreMissing({ store });
+			// A directory or other non-file would only fail later as SQLITE_CANTOPEN, a defect that says "restart it".
+			const found = statSync(store, { throwIfNoEntry: false });
+			if (found !== undefined && !found.isFile()) return yield* new StoreMissing({ store, notFile: true });
+			if (!create && found === undefined) return yield* new StoreMissing({ store });
 			const harness = yield* Effect.acquireRelease(
 				Effect.tryPromise({ try: () => open(spec, choice, store), catch: (error) => error }).pipe(
 					// SQLITE_BUSY: another connection holds the lock. node:sqlite reports extended codes, such as

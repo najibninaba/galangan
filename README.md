@@ -27,7 +27,8 @@ npm start       # one message per stdin line
 
 Only `--init` creates a store. Any other run on a missing store exits 78 and names the path it looked for, so a wrong
 `GALANGAN_DATA` or working directory never starts the harness with an empty past. `--init` on an existing store says so
-and leaves it unopened, so it never resumes that store's unfinished runs.
+and leaves it unopened, so it never resumes that store's unfinished runs. `--init` takes no other arguments, and a store
+path that is not a file (a directory, say) exits 78 too.
 
 Upgrading from a build that defaulted to `./data`: your history is in `./data/<harness>.sqlite`. Set
 `GALANGAN_DATA=./data`, or move the file to `~/.galangan/`, rather than running `--init`. A run from the directory that
@@ -62,12 +63,16 @@ To drive a harness from code instead of the CLI, provide `Shell.layer` to an Eff
 
 ```ts
 const answer = await Effect.runPromise(
-	Effect.provide(Shell.use((shell) => shell.ask("hello")), Shell.layer({ harness, choice, store: "data/x.sqlite", create: true })),
+	Effect.provide(
+		Shell.use((shell) => shell.ask("hello")),
+		Shell.layer({ harness, choice, store: "data/x.sqlite", create: true }),
+	),
 );
 ```
 
-Without `create: true` a missing store fails with `StoreMissing`; a store another process has open fails with
-`StoreLocked`. `shell.harness` is the open Pi Harness, for anything the shell does not wrap (more conversations, `inspect`, `watch`).
+Without `create: true` a missing store fails with `StoreMissing`, as does a path that is not a file (`notFile`); a store
+another process has open fails with `StoreLocked`. `shell.harness` is the open Pi Harness, for anything the shell does
+not wrap (more conversations, `inspect`, `watch`).
 
 ## Layout
 

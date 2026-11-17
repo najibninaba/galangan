@@ -5,6 +5,7 @@ import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, it, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -67,6 +68,17 @@ describe("store", () => {
 			const run = await cli(env, dir, ...args);
 			assert.deepEqual([run.code, run.stderr], [78, `galangan: ${store} is not a store file\n`], args.join(" "));
 		}
+	});
+
+	it("exits 78 on a store a newer Galangan wrote, naming both versions", async (t) => {
+		const { dir, env } = home(t);
+		assert.equal((await cli(env, dir, "--init")).code, 0);
+		const db = new DatabaseSync(join(dir, ".galangan", "tally.sqlite"));
+		db.exec("UPDATE galangan_store SET galangan = '9.0.0'");
+		db.close();
+		const run = await cli(env, dir, 'call tally {"label":"cups"}');
+		assert.equal(run.code, 78);
+		assert.match(run.stderr, /written by Galangan 9\.0\.0 on Pi .* newer than this Galangan 0\.\d+\.\d+ on Pi/);
 	});
 
 	it("refuses a second process while one has the store open, and serves the next one after it exits", async (t) => {

@@ -5,10 +5,17 @@ make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for r
 
 ## Unreleased
 
-Store: no migration by Galangan. Pi stays at 1.5.2. Existing tally counts are not carried over (see Changed).
+Store: no Pi migration; Pi stays at 1.5.2 (schema 2). Galangan adds its `galangan_store` stamp table on the first
+open, after backing the store up. Existing tally counts are not carried over (see Changed).
 
 ### Added
 
+- Store stamp (BIJAN-150): every open records the Galangan and Pi versions in a `galangan_store` table. A store
+  stamped by a newer Galangan or Pi, or at a newer Pi schema, fails with `StoreIncompatible` (CLI exit 78) naming both
+  versions. An open that upgrades a store first copies it to `<store>.<UTC time>.bak`, so a rollback restores that
+  copy; a failed copy is `StoreBackupFailed` (exit 78) and leaves the store as it was. `HarnessSpec.formats` gives a
+  kit extension's store format, 0 when undeclared; a store with another one fails at open.
+  Migration: none in code. The first open by this build of an existing store backs it up once, since it has no stamp.
 - Public package boundary (BIJAN-147): `galangan` (`src/index.ts`) and `galangan/testing` (`src/testing.ts`) are the
   only entries in `package.json` `exports`; everything else under `src/` is internal. `galangan/testing` has the faux
   model and `tempStore(t)`, a store path in a temporary directory removed after the test.

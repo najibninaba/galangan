@@ -5,4 +5,12 @@ export { runCli } from "./cli.ts";
 export { defineHarness, type HarnessSpec } from "./harness.ts";
 export { helper } from "./helper.ts";
 export { chooseModel, chooseThinking, InvalidModel, REAL_MODEL, type ModelChoice } from "./models.ts";
-export { Shell, StoreLocked, StoreMissing, Unanswered, type ShellOptions } from "./shell.ts";
+export {
+	Shell,
+	StoreBackupFailed,
+	StoreIncompatible,
+	StoreLocked,
+	StoreMissing,
+	Unanswered,
+	type ShellOptions,
+} from "./shell.ts";

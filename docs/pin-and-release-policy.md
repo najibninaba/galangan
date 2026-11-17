@@ -19,7 +19,8 @@ minor can break its API, and its store migrations are one-way, so Galangan's ver
   1.0, a Galangan minor may also break the shell's own API.
 - Shell fixes and Pi patch bumps ship as patch releases on the newest line only. There are no backports to older lines;
   a harness that needs a fix moves to the newest line.
-- Every release is a commit that sets `package.json` `version`, adds a `CHANGELOG.md` entry, and carries an annotated
+- Every release is a commit that sets `package.json` `version` (and `WRITER` in `src/shell.ts`, which a test keeps
+  equal), adds a `CHANGELOG.md` entry, and carries an annotated
   tag `v<version>` on `main`. `npm run check` and `npm test` pass on that commit.
 
 ## 3. Release notes
@@ -46,9 +47,11 @@ One change on `main`:
 2. Fix the `tsc` errors, guided by the `Migration:` lines.
 3. Run the harness's conformance tests against a copy of the production store.
 4. Stop the process and back up the store: copy the SQLite file and its WAL while no process holds it.
-5. Deploy.
+5. Deploy. The first open by the new version also copies the store to `<store>.<UTC time>.bak` beside it.
 
-Roll back by restoring that backup with the old version, never by running the old version on a migrated store.
+Roll back by restoring that backup with the old version, never by running the old version on a migrated store. A
+version with BIJAN-150 or later refuses a store a newer one stamped (exit 78), so it cannot open it by mistake; 0.1.0
+predates the stamp and does not check it.
 
 ## 6. Open decisions
 

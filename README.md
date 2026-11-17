@@ -65,6 +65,14 @@ Only `--init` creates a store. Any other run on a missing store exits 78 and nam
 and leaves it unopened, so it never resumes that store's unfinished runs. `--init` takes no other arguments, and a store
 path that is not a file (a directory, say) exits 78 too.
 
+Every open stamps the store with the Galangan and Pi versions that wrote it (a `galangan_store` table) and the kit
+formats it was written with. Pi's schema migrations are one-way, so a build older than the stamp or the schema exits
+78 naming both versions instead of opening the store. An open that upgrades a store (a newer Galangan or Pi, or a Pi
+schema migration) first copies it to `<store>.<UTC time>.bak` beside it and says so on stderr; to roll back, restore
+that copy and run the old build on it. Backups are never deleted by Galangan. If the copy fails (a full disk, say), the
+open exits 78 and leaves the store as it was; the copy is written under a temporary name first, so a `.bak` file is
+always whole.
+
 Upgrading from a build that defaulted to `./data`: your history is in `./data/<harness>.sqlite`. Set
 `GALANGAN_DATA=./data`, or move the file to `~/.galangan/`, rather than running `--init`. A run from the directory that
 holds the old store prints this hint when the new default is missing.
@@ -74,7 +82,7 @@ the session reads the next line. SIGINT or SIGTERM closes the Harness first, so 
 the store's lock is released; a second signal exits at once.
 
 Exit codes: 0 done, 1 failed (restart it), 75 store in use by another process (do not start a second one), 78 bad
-configuration, including a missing store (needs a person), 130/143 stopped by SIGINT/SIGTERM.
+configuration, including a missing store or one a newer build wrote (needs a person), 130/143 stopped by SIGINT/SIGTERM.
 
 ## Build a harness
 
@@ -120,6 +128,12 @@ export const myHarness = defineHarness({
 });
 ```
 
+A kit extension whose docs have no migration declares its store format in `formats: { <extension>: <n> }`. The stamp
+records a format for every extension, 0 for one that declares none, and a store written with another number fails at
+open with the wipe step, rather than reading the old docs as empty. Declare a format from the extension's first
+release: declaring one later, or dropping it, is a format change. An extension the store has no record of may start
+at any format.
+
 Keep state that must survive a restart in Pi documents (`defineDoc`) changed inside `api.commit`, as `tally` does, not
 in module variables. Mark a tool `replay: "safe"` only when running it twice is harmless; otherwise a crash mid-call
 gives the model an `interrupted` result. The Pi Durable README in `node_modules/@earendil-works/pi-durable/README.md`
@@ -137,8 +151,9 @@ const answer = await Effect.runPromise(
 ```
 
 Without `create: true` a missing store fails with `StoreMissing`, as does a path that is not a file (`notFile`); a store
-another process has open fails with `StoreLocked`. `shell.harness` is the open Pi Harness, for anything the shell does
-not wrap (more conversations, `inspect`, `watch`).
+another process has open fails with `StoreLocked`, and one a newer build wrote, or with another kit format, fails
+with `StoreIncompatible`. A failed backup before an upgrade is `StoreBackupFailed`. `shell.harness` is the open Pi
+Harness, for anything the shell does not wrap (more conversations, `inspect`, `watch`).
 
 ### Opt-in reasoning helper
 
@@ -174,8 +189,8 @@ are errors, not silently removed.
 | `src/cli.ts` | `runCli(harnesses)`: the CLI, harness selection, exit codes and signals |
 | `examples/tally/` | The reference harness: `tally.ts`, its CLI `main.ts` (`npm start`) and its test, on public entries only |
 | `src/helper.ts` | Opt-in bounded foreground helper (Sol high by default) |
-| `test/shell.test.ts` | The shell over a real SQLite file: tool state across a reopen, request ID dedup, missing and locked stores, model choice |
-| `test/store.test.ts` | The CLI as processes: one default store from any directory, `--init` (once), the old `./data` hint, a second process refused |
+| `test/shell.test.ts` | The shell over a real SQLite file: tool state across a reopen, request ID dedup, missing and locked stores, the stamp and backups, model choice |
+| `test/store.test.ts` | The CLI as processes: one default store from any directory, `--init` (once), the old `./data` hint, a second process refused, a newer store refused |
 | `test/main.test.ts` | The CLI as a child process: an unanswered line does not end the session; SIGINT/SIGTERM close the Harness |
 | `test/helper.test.ts` | Faux-only helper findings, limits, no recursion and restart recovery |
 | `test/boundary.test.ts` | Examples import only the public entries |

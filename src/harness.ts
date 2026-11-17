@@ -10,6 +10,12 @@ export type HarnessSpec = {
 	readonly name: string;
 	/** Installed and selected in this order. A later extension's tool replaces an earlier one with the same name. */
 	readonly extensions: readonly Extension[];
+	/**
+	 * Store format version per extension name, for kit extensions whose docs have no migration (memory first). The
+	 * store records it for every extension, 0 when undeclared, and a store written with another format fails at open
+	 * instead of reading as empty. Declare it from the extension's first release: adding it later is a format change.
+	 */
+	readonly formats?: { readonly [extension: string]: number };
 };
 
 /** Types a harness definition; pass harnesses to `runCli` (see examples/tally). */

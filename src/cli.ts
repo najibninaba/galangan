@@ -6,7 +6,8 @@
 // Environment: GALANGAN_HARNESS (a name among `harnesses`; default the first), GALANGAN_MODEL (see src/models.ts;
 // default the faux model), GALANGAN_THINKING (a supported thinking level; see src/models.ts), GALANGAN_DATA (store
 // directory; default ~/.galangan from any directory).
-// Exit codes: 0 done, 1 failed (restart it), 75 store in use by another process, 78 bad configuration (needs a person),
+// Exit codes: 0 done, 1 failed (restart it), 75 store in use by another process, 78 bad configuration or a store this
+// build must not open (needs a person),
 // 130/143 stopped by SIGINT/SIGTERM after closing the Harness.
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -15,7 +16,7 @@ import { createInterface } from "node:readline/promises";
 import { Effect } from "effect";
 import type { HarnessSpec } from "./harness.ts";
 import { chooseModel, InvalidModel } from "./models.ts";
-import { Shell, StoreLocked, StoreMissing } from "./shell.ts";
+import { Shell, StoreBackupFailed, StoreIncompatible, StoreLocked, StoreMissing } from "./shell.ts";
 
 const EXIT_LOCKED = 75;
 const EXIT_CONFIG = 78;
@@ -117,7 +118,10 @@ export function runCli(harnesses: readonly HarnessSpec[]): Promise<void> {
 			}
 			process.exitCode = error instanceof StoreLocked
 				? EXIT_LOCKED
-				: error instanceof InvalidModel || error instanceof StoreMissing ? EXIT_CONFIG : 1;
+				: error instanceof InvalidModel || error instanceof StoreMissing || error instanceof StoreIncompatible
+						|| error instanceof StoreBackupFailed
+					? EXIT_CONFIG
+					: 1;
 		},
 	);
 }

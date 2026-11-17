@@ -8,7 +8,7 @@ import { createModels, getSupportedThinkingLevels } from "@earendil-works/pi-ai/
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { Effect } from "effect";
-import { tallyHarness } from "../src/harnesses/tally.ts";
+import { tallyHarness } from "../examples/tally/tally.ts";
 import { chooseModel, chooseThinking, fauxModels, FAUX_MODEL, InvalidModel } from "../src/models.ts";
 import { Shell, StoreLocked, StoreMissing } from "../src/shell.ts";
 

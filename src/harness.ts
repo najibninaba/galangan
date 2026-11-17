@@ -12,5 +12,5 @@ export type HarnessSpec = {
 	readonly extensions: readonly Extension[];
 };
 
-/** Types a harness definition; harnesses live in src/harnesses/ and are listed in src/harnesses/index.ts. */
+/** Types a harness definition; pass harnesses to `runCli` (see examples/tally). */
 export const defineHarness = (spec: HarnessSpec): HarnessSpec => spec;

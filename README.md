@@ -21,7 +21,7 @@ npm start       # one message per stdin line
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GALANGAN_HARNESS` | the first in `src/harnesses/index.ts` | Which harness to run |
+| `GALANGAN_HARNESS` | the first passed to `runCli` | Which harness to run |
 | `GALANGAN_MODEL` | `faux` | Offline `faux`; `real` selects `openai/gpt-6.1-terra`; or use `<provider>/<model id>` from pi-ai's built-in catalog |
 | `GALANGAN_THINKING` | `medium` when supported, otherwise the first supported level (`off` for non-reasoning models) | Pi thinking level; explicitly unsupported levels are configuration errors (exit 78), never silently clamped |
 | `GALANGAN_DATA` | `~/.galangan` | Store directory; each harness gets `<name>.sqlite`. The default is the same from any working directory |
@@ -78,9 +78,20 @@ configuration, including a missing store (needs a person), 130/143 stopped by SI
 
 ## Build a harness
 
-1. Copy [`src/harnesses/tally.ts`](src/harnesses/tally.ts) to `src/harnesses/<name>.ts`.
+A harness imports Galangan only through its two public entries: `galangan` (the shell, `runCli`, `defineHarness`,
+`helper`, model choice and errors) and `galangan/testing` (the faux model and `tempStore(t)`). Everything else under
+`src/` is internal; `exports` in `package.json` refuses deep imports. [`examples/tally/`](examples/tally) is the
+reference harness and follows that rule (a test checks it).
+
+1. Copy [`examples/tally/`](examples/tally) for your harness: `tally.ts`, `main.ts` and `tally.test.ts`.
 2. Put your tools, sections, hooks and tasks in its extensions, and give it a name with `defineHarness`.
-3. List it in [`src/harnesses/index.ts`](src/harnesses/index.ts) and run it with `GALANGAN_HARNESS=<name> npm start`.
+3. `main.ts` passes your harnesses to `runCli([...])`, which is the whole CLI above; `GALANGAN_HARNESS` picks among
+   them.
+
+Doc kinds and extension names starting `galangan.` are reserved for the shell, because Pi does not check kind
+collisions; use your harness's own prefix, as tally uses `tally.`. Pi, pi-ai, chord, pi-schema and Effect are exact
+peer dependencies, so a harness gets the same copies the shell runs on. Installing Galangan from another repository
+needs the build step in BIJAN-148, because Node does not strip types under `node_modules`.
 
 ```ts
 export const myHarness = defineHarness({
@@ -111,7 +122,7 @@ not wrap (more conversations, `inspect`, `watch`).
 
 ### Opt-in reasoning helper
 
-Add `helper()` from `src/helper.ts` to a harness's `extensions` to offer `delegate({ task })`. It defaults to
+Add `helper()` from `galangan` to a harness's `extensions` to offer `delegate({ task })`. It defaults to
 `openai/gpt-6.1-sol` at `high`. With an OpenAI root, the provider registered for Terra also registers Sol, using the same
 key. A faux or other-provider root must explicitly register the helper's provider in its `choice.models` and configure
 that provider's credentials, or inject another registered helper model. Errors distinguish unregistered providers or
@@ -138,13 +149,15 @@ are errors, not silently removed.
 | `src/harness.ts` | The extension point: `HarnessSpec` and `defineHarness` |
 | `src/shell.ts` | `Shell` service and layer: opens the Harness over SQLite (`synchronous = FULL`, exclusive lock), resumes unfinished work, closes it when the scope ends; `ask` submits to the root conversation |
 | `src/models.ts` | `GALANGAN_MODEL` → model; the deterministic faux model and its script format |
-| `src/main.ts` | CLI entry |
-| `src/harnesses/` | Harnesses this build ships; `tally` is the example |
+| `src/index.ts`, `src/testing.ts` | The public entries, `galangan` and `galangan/testing`; nothing else is public |
+| `src/cli.ts` | `runCli(harnesses)`: the CLI, harness selection, exit codes and signals |
+| `examples/tally/` | The reference harness: `tally.ts`, its CLI `main.ts` (`npm start`) and its test, on public entries only |
 | `src/helper.ts` | Opt-in bounded foreground helper (Sol high by default) |
 | `test/shell.test.ts` | The shell over a real SQLite file: tool state across a reopen, request ID dedup, missing and locked stores, model choice |
 | `test/store.test.ts` | The CLI as processes: one default store from any directory, `--init` (once), the old `./data` hint, a second process refused |
 | `test/main.test.ts` | The CLI as a child process: an unanswered line does not end the session; SIGINT/SIGTERM close the Harness |
 | `test/helper.test.ts` | Faux-only helper findings, limits, no recursion and restart recovery |
+| `test/boundary.test.ts` | Examples import only the public entries |
 | `test/real-model-smoke.ts` | Paid OpenAI probe; only run by `npm run smoke:real`, not `npm test` |
 | `test/real-model-recovery.ts` | Paid, gated SIGKILL/reopen experiment; only run by `npm run smoke:recovery` |
 

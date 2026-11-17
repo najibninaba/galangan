@@ -10,7 +10,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import { AssistantEntry } from "@earendil-works/pi-durable";
 import { Effect } from "effect";
 import { defineHarness } from "../src/harness.ts";
-import { tallyHarness } from "../src/harnesses/tally.ts";
+import { tallyHarness } from "../examples/tally/tally.ts";
 import { helper } from "../src/helper.ts";
 import { Shell } from "../src/shell.ts";
 
@@ -156,7 +156,7 @@ it("gives a child only explicitly selected extensions, independent of the parent
 		const records = await shell.harness.commit((tx) => tx.scanConversations({}, 10), context);
 		const child = (await shell.harness.conversation(records.items.find((record) => record.id !== root.id)!.id, context))!;
 		const agent = await child.agent(context);
-		assert.deepEqual(agent.extensions.map((extension) => extension.name), ["galangan.tally"]);
+		assert.deepEqual(agent.extensions.map((extension) => extension.name), ["tally"]);
 		assert.deepEqual(agent.tools.map((tool) => tool.name), ["tally"]);
 	})), layer()));
 });

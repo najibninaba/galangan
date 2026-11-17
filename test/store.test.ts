@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { describe, it, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 
-const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
+const main = fileURLToPath(new URL("../examples/tally/main.ts", import.meta.url));
 
 /** A temp HOME with no GALANGAN_DATA, so the CLI picks its default store. */
 function home(t: TestContext) {

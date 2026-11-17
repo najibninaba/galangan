@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, type TestContext } from "node:test";
 
-const MAIN = join(import.meta.dirname, "..", "src", "main.ts");
+const MAIN = join(import.meta.dirname, "..", "examples", "tally", "main.ts");
 const ENV = { GALANGAN_MODEL: "faux", GALANGAN_HARNESS: "tally" };
 
 /** Starts the CLI in stdin mode on `data`; `until(text)` waits for `text` on stdout or stderr. */

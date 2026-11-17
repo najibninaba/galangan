@@ -3,6 +3,29 @@
 Each release says whether it migrates the store and gives a `Migration:` line for every change harness code must
 make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for release lines and how to upgrade.
 
+## Unreleased
+
+Store: no migration by Galangan. Pi stays at 1.5.2. Existing tally counts are not carried over (see Changed).
+
+### Added
+
+- Public package boundary (BIJAN-147): `galangan` (`src/index.ts`) and `galangan/testing` (`src/testing.ts`) are the
+  only entries in `package.json` `exports`; everything else under `src/` is internal. `galangan/testing` has the faux
+  model and `tempStore(t)`, a store path in a temporary directory removed after the test.
+- `runCli(harnesses)` is the CLI, so a harness repo's entry point is one call and the shell imports no harness.
+  `GALANGAN_HARNESS` picks among the harnesses passed, defaulting to the first.
+- Pi (`pi-durable`, `pi-ai`, `chord`, `pi-schema`) and Effect are exact `peerDependencies`, so a harness cannot load a
+  second copy. Installing Galangan from another repository waits on a build step (BIJAN-148).
+
+### Changed
+
+- `tally` moved to `examples/tally/` with its CLI (`main.ts`, still `npm start`) and its own test, importing only the
+  public entries. Its doc kind is now `tally.counts` and its extension `tally`: `galangan.*` doc kinds and extension
+  names are reserved for the shell.
+  Migration: counts in an existing tally store are not read under the new kind; no store worth keeping existed.
+  Harness code imports `defineHarness`, `helper` and the rest from `galangan` instead of `src/*.ts`, and calls
+  `runCli([...])` instead of listing itself in `src/harnesses/index.ts`, which is gone.
+
 ## 0.1.0 - 2026-11-17
 
 The first working release: a usable command-line app on Pi Durable 1.5.2 and Effect 4.1.4. Opens the 0.1 line, which

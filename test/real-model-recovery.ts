@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { Effect } from "effect";
 import { defineHarness } from "../src/harness.ts";
-import { Tallies, tallyHarness } from "../src/harnesses/tally.ts";
+import { Tallies, tallyHarness } from "../examples/tally/tally.ts";
 import { helper } from "../src/helper.ts";
 import { chooseModel } from "../src/models.ts";
 import { Shell } from "../src/shell.ts";

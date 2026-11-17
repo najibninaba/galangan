@@ -1,13 +1,15 @@
 // Example harness: one tool whose state is durable. `tally({ label })` adds one to a per-conversation counter kept in
 // a Pi document, so counts survive restarts and the increment commits atomically with the tool call's own record.
-// Copy this file to start a new harness, then list it in src/harnesses/index.ts.
+// Copy this directory to start a new harness. It imports Galangan only through its public entries, as a harness repo
+// must. Doc kinds and extension names starting `galangan.` are reserved for the shell (Pi does not check collisions),
+// so tally uses its own `tally.` prefix.
 import { defineDoc, defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
-import { defineHarness } from "../harness.ts";
+import { defineHarness } from "galangan";
 
 /** Counts by label, one document per conversation. A fork keeps its parent's counts. */
 export const Tallies = defineDoc<{ counts: Record<string, number> }>({
-	kind: "galangan.tally",
+	kind: "tally.counts",
 	version: 1,
 	scope: "conversation",
 	history: "latest",
@@ -36,7 +38,7 @@ export const tallyHarness = defineHarness({
 	name: "tally",
 	extensions: [
 		defineExtension({
-			name: "galangan.tally",
+			name: "tally",
 			tools: [tally],
 			sections: [section("tally", () => "You keep tallies. Use the `tally` tool whenever the user counts something.")],
 		}),

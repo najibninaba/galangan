@@ -90,8 +90,28 @@ reference harness and follows that rule (a test checks it).
 
 Doc kinds and extension names starting `galangan.` are reserved for the shell, because Pi does not check kind
 collisions; use your harness's own prefix, as tally uses `tally.`. Pi, pi-ai, chord, pi-schema and Effect are exact
-peer dependencies, so a harness gets the same copies the shell runs on. Installing Galangan from another repository
-needs the build step in BIJAN-148, because Node does not strip types under `node_modules`.
+peer dependencies, so a harness gets the same copies the shell runs on.
+
+A harness repo installs Galangan with npm as a git dependency pinned to a commit, plus the exact peers from
+[Pins](#pins). The ampcode.com remote needs Amp git credentials (an orb has them); pnpm also needs `galangan` in its
+`allowBuilds` list before it runs the build:
+
+```sh
+npm install --save-exact "galangan@git+https://ampcode.com/@najib/galangan.git#<commit>" \
+  @earendil-works/pi-durable@1.5.2 @earendil-works/pi-ai@1.5.2 @earendil-works/chord@1.5.2 \
+  @earendil-works/pi-schema@1.5.2 effect@4.1.4
+npm install --save-dev @types/node   # galangan/testing's types use node:test
+```
+
+Copy `tsconfig.json`'s `skipLibCheck: true` too: a dependency of pi-ai ships declarations that do not type-check.
+
+Node does not strip types under `node_modules`, so npm runs Galangan's `prepare` script (`npm run build`, tsc into
+`dist/` with `.d.ts`) when it installs the commit; the harness repo itself still runs `.ts` with no build step. Inside
+this repository the npm scripts set `--conditions=galangan-source`, which points `galangan` back at `src/`: no build
+is needed, and tests that import both `../src` and `galangan` share one copy of `Shell` and its errors. Run a file
+directly with `node --conditions=galangan-source ...`; without it `galangan` loads `dist/`, a second copy that
+`npm ci` built and that is stale once `src/` changes. `npm run check` also type-checks the `.d.ts` build, so a
+declaration error fails there rather than in a harness repo's install.
 
 ```ts
 export const myHarness = defineHarness({
@@ -150,6 +170,7 @@ are errors, not silently removed.
 | `src/shell.ts` | `Shell` service and layer: opens the Harness over SQLite (`synchronous = FULL`, exclusive lock), resumes unfinished work, closes it when the scope ends; `ask` submits to the root conversation |
 | `src/models.ts` | `GALANGAN_MODEL` → model; the deterministic faux model and its script format |
 | `src/index.ts`, `src/testing.ts` | The public entries, `galangan` and `galangan/testing`; nothing else is public |
+| `tsconfig.build.json` | `npm run build` (run by `prepare`): `src/` to `dist/` JS and `.d.ts`, what `exports` gives other repos |
 | `src/cli.ts` | `runCli(harnesses)`: the CLI, harness selection, exit codes and signals |
 | `examples/tally/` | The reference harness: `tally.ts`, its CLI `main.ts` (`npm start`) and its test, on public entries only |
 | `src/helper.ts` | Opt-in bounded foreground helper (Sol high by default) |

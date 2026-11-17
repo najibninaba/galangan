@@ -22,3 +22,10 @@ it("keeps examples off Galangan's internals", () => {
 		}
 	}
 });
+
+// Tests import both ../src and "galangan" (through tally). Without the galangan-source condition the package name
+// resolves to dist/, a second copy whose Shell and error classes fail `instanceof` against src's.
+it("resolves galangan to the same src modules the tests import", async () => {
+	assert.equal((await import("galangan")).Shell, (await import("../src/shell.ts")).Shell);
+	assert.equal((await import("galangan/testing")).fauxModels, (await import("../src/models.ts")).fauxModels);
+});

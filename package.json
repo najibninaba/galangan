@@ -6,18 +6,29 @@
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./testing": "./src/testing.ts"
+    ".": {
+      "galangan-source": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "galangan-source": "./src/testing.ts",
+      "default": "./dist/testing.js"
+    }
   },
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=26.12.0"
   },
   "scripts": {
-    "start": "node examples/tally/main.ts",
-    "check": "tsc -p .",
-    "test": "node --test --test-reporter=spec \"test/**/*.test.ts\" \"examples/**/*.test.ts\"",
-    "smoke:real": "node test/real-model-smoke.ts",
-    "smoke:recovery": "node test/real-model-recovery.ts"
+    "start": "NODE_OPTIONS=\"--conditions=galangan-source $NODE_OPTIONS\" node examples/tally/main.ts",
+    "check": "tsc -p . && tsc -p tsconfig.build.json --noEmit",
+    "test": "NODE_OPTIONS=\"--conditions=galangan-source $NODE_OPTIONS\" node --test --test-reporter=spec \"test/**/*.test.ts\" \"examples/**/*.test.ts\"",
+    "smoke:real": "NODE_OPTIONS=\"--conditions=galangan-source $NODE_OPTIONS\" node test/real-model-smoke.ts",
+    "smoke:recovery": "NODE_OPTIONS=\"--conditions=galangan-source $NODE_OPTIONS\" node test/real-model-recovery.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build"
   },
   "devDependencies": {
     "@earendil-works/chord": "1.5.2",

@@ -15,7 +15,11 @@ Store: no migration by Galangan. Pi stays at 1.5.2. Existing tally counts are no
 - `runCli(harnesses)` is the CLI, so a harness repo's entry point is one call and the shell imports no harness.
   `GALANGAN_HARNESS` picks among the harnesses passed, defaulting to the first.
 - Pi (`pi-durable`, `pi-ai`, `chord`, `pi-schema`) and Effect are exact `peerDependencies`, so a harness cannot load a
-  second copy. Installing Galangan from another repository waits on a build step (BIJAN-148).
+  second copy.
+- Harness repos install Galangan as a git dependency pinned to a commit (BIJAN-148). `prepare` builds `dist/` (JS and
+  `.d.ts`) on install, since Node does not strip types under `node_modules`; `exports` points there by default.
+  Galangan's own npm scripts use the `galangan-source` condition, so its runs and tests still need no build.
+  Migration: run files in this repository through the npm scripts, or with `node --conditions=galangan-source`.
 
 ### Changed
 

@@ -11,10 +11,12 @@ A harness app shell on Pi Durable and Effect. Read `README.md` first for the lay
 
 ## Commands
 
-- `npm ci` (orbs run `.agents/setup`), then `npm run check` (tsc, no emit) and `npm test` (node --test). Run both
-  before every commit.
-- Node runs the `.ts` files directly (type stripping); there is no build step. Keep TypeScript erasable: no enums,
-  namespaces or parameter properties (`erasableSyntaxOnly`), and import local files with their `.ts` extension.
+- `npm ci` (orbs run `.agents/setup`), then `npm run check` (tsc, no emit, including the `.d.ts` build) and
+  `npm test` (node --test). Run both before every commit.
+- Node runs the `.ts` files directly (type stripping). Keep TypeScript erasable: no enums, namespaces or parameter
+  properties (`erasableSyntaxOnly`), and import local files with their `.ts` extension.
+- `dist/` is only for other repos: `prepare` builds it, including on `npm ci` here, and it goes stale as `src/` changes.
+  Run files through the npm scripts, or with `node --conditions=galangan-source`, so `galangan` resolves to `src/`.
 
 ## Conventions
 

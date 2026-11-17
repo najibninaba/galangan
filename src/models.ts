@@ -71,10 +71,12 @@ export const chooseThinking = (choice: ModelChoice, level?: string): Effect.Effe
 		const model = choice.models.getModel(provider, modelId);
 		if (model === undefined) return yield* new InvalidModel({ reason: `unknown model ${provider}/${modelId}` });
 		const supported = getSupportedThinkingLevels(model);
-		const selected = level ?? choice.thinkingLevel ?? (model.reasoning ? "medium" : "off");
+		const selected = level ?? choice.thinkingLevel;
+		if (selected === undefined) return supported.includes("medium") ? "medium" : supported[0]!;
 		if (!supported.includes(selected as ModelThinkingLevel)) {
 			return yield* new InvalidModel({
-				reason: `GALANGAN_THINKING is "${selected}"; ${provider}/${modelId} supports ${supported.join(", ")}`,
+				reason: `${level === undefined ? "choice.thinkingLevel" : "GALANGAN_THINKING"} is "${selected}"; ` +
+					`${provider}/${modelId} supports ${supported.join(", ")}`,
 			});
 		}
 		return selected as ModelThinkingLevel;

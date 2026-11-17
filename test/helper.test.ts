@@ -10,24 +10,28 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import { AssistantEntry } from "@earendil-works/pi-durable";
 import { Effect } from "effect";
 import { defineHarness } from "../src/harness.ts";
-import { helper } from "../src/kit/helper.ts";
+import { tallyHarness } from "../src/harnesses/tally.ts";
+import { helper } from "../src/helper.ts";
 import { Shell } from "../src/shell.ts";
 
-function setup(t: TestContext) {
+function setup(t: TestContext, options: Parameters<typeof helper>[0] = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "galangan-helper-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const faux = fauxProvider({ models: [{ id: "parent", reasoning: true }, { id: "helper", reasoning: true }] });
 	const models = createModels();
 	models.setProvider(faux.provider);
-	const spec = defineHarness({
-		name: "helper-test",
-		extensions: [helper({ model: { provider: "faux", modelId: "helper" }, thinkingLevel: "high" })],
-	});
+	// Recreate extensions on reopen too: a closure-held budget must not survive merely because this is one process.
 	const layer = () => Shell.layer({
-		harness: spec, store: join(dir, "store.sqlite"), create: true,
+		harness: defineHarness({
+			name: "helper-test",
+			extensions: [...tallyHarness.extensions, helper({
+				model: { provider: "faux", modelId: "helper" }, thinkingLevel: "high", ...options,
+			})],
+		}),
+		store: join(dir, "store.sqlite"), create: true,
 		choice: { models, model: { provider: "faux", modelId: "parent" }, thinkingLevel: "medium" },
 	});
-	return { faux, layer };
+	return { faux, models, layer };
 }
 
 it("returns findings to the parent, caps parallel and later calls, and resets the budget for the next answer", async (t) => {
@@ -74,13 +78,22 @@ it("returns findings to the parent, caps parallel and later calls, and resets th
 		assert.equal(childRequests, 3);
 		assert.equal(yield* shell.ask("another task"), "parent synthesis again");
 		assert.equal(childRequests, 4);
+		const conversations = yield* Effect.promise(() => shell.harness.commit((tx) => tx.scanConversations({}, 10), context));
+		for (const record of conversations.items.filter((record) => record.owner !== undefined)) {
+			const child = yield* Effect.promise(() => shell.harness.conversation(record.id, context));
+			const agent = yield* Effect.promise(() => child!.agent(context));
+			assert.deepEqual(agent.extensions, [], "no parent tools, sections or hooks by default");
+			assert.deepEqual(agent.tools, []);
+		}
 	}), layer()));
 });
 
-it("reattaches to one task-owned child and submission after reopening mid-helper", async (t) => {
+it("reattaches after reopening mid-helper without replenishing the answer's budget", async (t) => {
 	const { faux, layer } = setup(t);
 	const started = Promise.withResolvers<void>();
 	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("delegate", { task: "first task" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("first finding"),
 		fauxAssistantMessage(fauxToolCall("delegate", { task: "unfinished task" }), { stopReason: "toolUse" }),
 		(_transcript, options) => {
 			started.resolve();
@@ -99,6 +112,17 @@ it("reattaches to one task-owned child and submission after reopening mid-helper
 		fauxAssistantMessage("recovered finding"),
 		(transcript) => {
 			assert.match(JSON.stringify(transcript.messages.at(-1)), /recovered finding/);
+			return fauxAssistantMessage(fauxToolCall("delegate", { task: "third task" }), { stopReason: "toolUse" });
+		},
+		fauxAssistantMessage("third finding"),
+		(transcript) => {
+			assert.match(JSON.stringify(transcript.messages.at(-1)), /third finding/);
+			return fauxAssistantMessage(fauxToolCall("delegate", { task: "fourth must be refused" }), { stopReason: "toolUse" });
+		},
+		(transcript) => {
+			const result = transcript.messages.at(-1);
+			assert.ok(result?.role === "toolResult" && result.isError, "fourth helper call must be refused after reopen");
+			assert.match(JSON.stringify(result.content), /Three helper calls used/);
 			return fauxAssistantMessage("parent recovered answer");
 		},
 	]);
@@ -109,6 +133,55 @@ it("reattaches to one task-owned child and submission after reopening mid-helper
 		const entry = await shell.harness.commit((tx) => tx.entry(AssistantEntry, settled.answer), context);
 		assert.match(JSON.stringify(entry?.model), /parent recovered answer/);
 		const conversations = await shell.harness.commit((tx) => tx.scanConversations({}, 10), context);
-		assert.equal(conversations.items.length, 2, "only root and the reused child");
+		assert.equal(conversations.items.length, 4, "root and three children; the resumed child was reused, fourth refused");
 	})), layer()));
+});
+
+it("gives a child only explicitly selected extensions, independent of the parent's tool filters", async (t) => {
+	const { faux, layer } = setup(t, { extensions: tallyHarness.extensions });
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("delegate", { task: "count one cup" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("tally", { label: "cups" }), { stopReason: "toolUse" }),
+		(transcript) => {
+			assert.match(JSON.stringify(transcript.messages.at(-1)), /cups = 1/);
+			return fauxAssistantMessage("one cup finding");
+		},
+		fauxAssistantMessage("one cup synthesis"),
+	]);
+	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
+		const root = await shell.harness.root(context);
+		const delegate = (await root.agent(context)).tools.find((tool) => tool.name === "delegate")!;
+		await root.configure({ tools: [delegate], modelTools: [delegate] }, context);
+		assert.equal(await Effect.runPromise(shell.ask("count")), "one cup synthesis");
+		const records = await shell.harness.commit((tx) => tx.scanConversations({}, 10), context);
+		const child = (await shell.harness.conversation(records.items.find((record) => record.id !== root.id)!.id, context))!;
+		const agent = await child.agent(context);
+		assert.deepEqual(agent.extensions.map((extension) => extension.name), ["galangan.tally"]);
+		assert.deepEqual(agent.tools.map((tool) => tool.name), ["tally"]);
+	})), layer()));
+});
+
+it("distinguishes unregistered helper providers/models, unsupported effort and missing credentials", async (t) => {
+	for (const [model, thinkingLevel, expected] of [
+		[{ provider: "absent", modelId: "helper" }, "high", /helper provider absent is not registered/],
+		[{ provider: "faux", modelId: "absent" }, "high", /helper model faux\/absent is not registered/],
+		[{ provider: "faux", modelId: "helper" }, "xhigh", /helper thinkingLevel is "xhigh"; faux\/helper supports/],
+		[{ provider: "locked", modelId: "helper" }, "high", /helper provider locked has no credentials configured/],
+	] as const) {
+		const { faux, models, layer } = setup(t, { model, thinkingLevel });
+		const locked = fauxProvider({ provider: "locked", models: [{ id: "helper", reasoning: true }] });
+		models.setProvider({ ...locked.provider, auth: { apiKey: {
+			name: "unconfigured test provider", resolve: async () => undefined,
+		} } });
+		faux.setResponses([
+			fauxAssistantMessage(fauxToolCall("delegate", { task: "work" }), { stopReason: "toolUse" }),
+			(transcript) => {
+				const result = transcript.messages.at(-1);
+				assert.ok(result?.role === "toolResult" && result.isError);
+				assert.match(result.content.map((part) => part.type === "text" ? part.text : "").join(""), expected);
+				return fauxAssistantMessage("configuration error reported");
+			},
+		]);
+		await Effect.runPromise(Effect.provide(Shell.use((shell) => shell.ask("work")), layer()));
+	}
 });

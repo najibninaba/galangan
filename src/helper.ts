@@ -4,7 +4,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import {
 	AssistantEntry, configure, defineDoc, defineExtension, defineTool, LiveDoc,
-	type EntryId, type ModelRef, type TaskId,
+	type EntryId, type Extension, type ModelRef, type TaskId,
 } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
 
@@ -22,7 +22,13 @@ const Budget = defineDoc<{ first?: EntryId; calls: TaskId[] }>({
 export function helper({
 	model = { provider: "openai", modelId: "gpt-6.1-sol" },
 	thinkingLevel = "high",
-}: { readonly model?: ModelRef; readonly thinkingLevel?: ModelThinkingLevel } = {}) {
+	extensions = [],
+}: {
+	readonly model?: ModelRef;
+	readonly thinkingLevel?: ModelThinkingLevel;
+	/** Explicit child capabilities; these extensions must also be installed in the harness registry. */
+	readonly extensions?: readonly Extension[];
+} = {}) {
 	const extension = defineExtension({
 		name: "galangan.helper",
 		tools: [defineTool({
@@ -33,16 +39,29 @@ export function helper({
 			parameters: obj({ task: str() }),
 			replay: "safe",
 			execute: async (args, api, context) => {
+				if (api.models.getProvider(model.provider) === undefined) {
+					throw new Error(`helper provider ${model.provider} is not registered; register it in the shell's Models`);
+				}
 				const resolved = api.models.getModel(model.provider, model.modelId);
-				if (resolved === undefined || !getSupportedThinkingLevels(resolved).includes(thinkingLevel)) {
-					throw new Error(`helper model ${model.provider}/${model.modelId} does not support ${thinkingLevel}`);
+				if (resolved === undefined) {
+					throw new Error(`helper model ${model.provider}/${model.modelId} is not registered`);
+				}
+				const supported = getSupportedThinkingLevels(resolved);
+				if (!supported.includes(thinkingLevel)) {
+					throw new Error(`helper thinkingLevel is "${thinkingLevel}"; ` +
+						`${model.provider}/${model.modelId} supports ${supported.join(", ")}`);
+				}
+				if (await api.models.checkAuth(model.provider) === undefined) {
+					throw new Error(`helper provider ${model.provider} has no credentials configured`);
 				}
 				const childId = await api.commit(async (tx) => {
 					const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
 					if (existing !== undefined) return existing.id;
 					const live = await tx.doc(LiveDoc, api.conversationId);
 					const budget = await tx.doc(Budget, api.conversationId);
-					const first = live.run!.first!;
+					// Pi can resume a legacy tool round without first; do not silently share its budget with another run.
+					const first = live.run?.first;
+					if (first === undefined) throw new Error("helper cannot identify this answer's budget: run.first is missing");
 					if (budget.first !== first) {
 						budget.first = first;
 						budget.calls = [];
@@ -52,7 +71,9 @@ export function helper({
 					const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
 					await configure(tx, child.id, {
 						model, thinkingLevel,
-						extensions: { remove: [extension] },
+						extensions: extensions.filter((candidate) => candidate.name !== extension.name),
+						tools: { remove: extension.tools! },
+						modelTools: null,
 						instructions: "Return concise findings for the task, including uncertainties. The parent writes the user-facing answer.",
 					});
 					return child.id;

@@ -23,7 +23,7 @@ npm start       # one message per stdin line
 |---|---|---|
 | `GALANGAN_HARNESS` | the first in `src/harnesses/index.ts` | Which harness to run |
 | `GALANGAN_MODEL` | `faux` | Offline `faux`; `real` selects `openai/gpt-6.1-terra`; or use `<provider>/<model id>` from pi-ai's built-in catalog |
-| `GALANGAN_THINKING` | `medium` for reasoning models, `off` otherwise | Pi thinking level; unsupported levels are configuration errors (exit 78), never silently clamped |
+| `GALANGAN_THINKING` | `medium` when supported, otherwise the first supported level (`off` for non-reasoning models) | Pi thinking level; explicitly unsupported levels are configuration errors (exit 78), never silently clamped |
 | `GALANGAN_DATA` | `~/.galangan` | Store directory; each harness gets `<name>.sqlite`. The default is the same from any working directory |
 
 ### Real models
@@ -35,14 +35,17 @@ Other providers use their usual key variables, such as `ANTHROPIC_API_KEY`.
 
 The shell validates effort against the selected model's catalog, applies model and effort to the root on **every
 open**, then resumes work. Existing faux stores therefore switch to the requested real model without losing history.
+Reopening with a different model or effort switches subsequent generations of an unfinished root run partway through;
+an in-flight helper child keeps its own model and effort.
 The stdin banner includes the configured effort. Effort changes use OpenAI Responses `configuration_update` items;
 Sign in with ChatGPT tokens reject those items, so use an API key for this path.
 
 `npm run smoke:real` is a separate, paid integration check (requires the environment key). It creates a fresh store
-under `.amp/in/orb-backup/`, runs Terra's tally tool, exits that Node process, reopens the same store in another process,
-checks the persisted count, and calls the Sol helper once. It also probes a change from medium to high effort on the
-existing transcript. It prints each committed generation's model, Pi and provider efforts, token usage and estimated
-USD cost, plus per-model totals from `harness.usage()`. Supply a fresh directory as `npm run smoke:real -- <directory>`
+under the OS temporary directory, runs Terra's tally tool, exits that Node process, reopens the same store in another
+process, checks the persisted count, and forces one Sol helper call with a smoke-only provider hook. It also probes a
+change from medium to high effort on the existing transcript. It prints each committed generation's model, Pi and
+provider efforts, token usage and estimated USD cost, plus per-model totals from `harness.usage()`.
+Supply a fresh directory as `npm run smoke:real -- <directory>`
 to keep its store at a specific path. It refuses an existing smoke store. `npm test` remains faux-only with no network.
 
 Only `--init` creates a store. Any other run on a missing store exits 78 and names the path it looked for, so a wrong
@@ -96,15 +99,20 @@ not wrap (more conversations, `inspect`, `watch`).
 
 ### Opt-in reasoning helper
 
-Add `helper()` from `src/kit/helper.ts` to a harness's `extensions` to offer `delegate({ task })`. It defaults to
-`openai/gpt-6.1-sol` at `high`; the OpenAI provider registered for Terra also registers Sol, using the same key.
+Add `helper()` from `src/helper.ts` to a harness's `extensions` to offer `delegate({ task })`. It defaults to
+`openai/gpt-6.1-sol` at `high`. With an OpenAI root, the provider registered for Terra also registers Sol, using the same
+key. A faux or other-provider root must explicitly register the helper's provider in its `choice.models` and configure
+that provider's credentials, or inject another registered helper model. Errors distinguish unregistered providers or
+models, unsupported effort, and missing credentials.
 Sol returns findings to Terra, and Terra writes the user-facing answer; delegation never switches the root model.
 The example tally harness does not opt in, since counting is deterministic work.
 
 The foreground helper is task-owned and replay-safe, reusing its child and `subagent:<taskId>` request after a restart.
-It inherits the harness's other tools but not the helper extension, so it cannot delegate recursively. A persisted
-budget permits three helper calls per answer across rounds and parallel calls, including failed children; the next
-answer gets a fresh budget. Aborting the parent also aborts its helper. This prevents duplicate children/submissions,
+The child gets no extensions by default: no parent tools, prompt sections or hooks. Opt in to child capabilities with
+`helper({ extensions: [readOnlyExtension] })`; those extensions must also be installed in the harness's `extensions`.
+The helper itself is excluded, so the child cannot delegate recursively. A persisted budget permits three helper
+calls per answer across rounds, parallel calls and restarts, including failed children; the next answer gets a fresh
+budget. Aborting the parent also aborts its helper. This prevents duplicate children/submissions,
 not duplicate provider billing if a crash interrupts a generation.
 
 For offline harness tests inject a registered faux model and its supported effort:
@@ -120,7 +128,7 @@ are errors, not silently removed.
 | `src/models.ts` | `GALANGAN_MODEL` → model; the deterministic faux model and its script format |
 | `src/main.ts` | CLI entry |
 | `src/harnesses/` | Harnesses this build ships; `tally` is the example |
-| `src/kit/helper.ts` | Opt-in bounded foreground helper (Sol high by default) |
+| `src/helper.ts` | Opt-in bounded foreground helper (Sol high by default) |
 | `test/shell.test.ts` | The shell over a real SQLite file: tool state across a reopen, request ID dedup, missing and locked stores, model choice |
 | `test/store.test.ts` | The CLI as processes: one default store from any directory, `--init` (once), the old `./data` hint, a second process refused |
 | `test/main.test.ts` | The CLI as a child process: an unanswered line does not end the session; SIGINT/SIGTERM close the Harness |

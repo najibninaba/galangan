@@ -2,7 +2,8 @@
 // `npm start -- --init` creates the store; nothing else does, so a wrong GALANGAN_DATA is an error, not an empty store.
 //
 // Environment: GALANGAN_HARNESS (a name from src/harnesses/index.ts; default the first), GALANGAN_MODEL (see
-// src/models.ts; default the faux model), GALANGAN_DATA (store directory; default ~/.galangan from any directory).
+// src/models.ts; default the faux model), GALANGAN_THINKING (a supported thinking level; see src/models.ts),
+// GALANGAN_DATA (store directory; default ~/.galangan from any directory).
 // Exit codes: 0 done, 1 failed (restart it), 75 store in use by another process, 78 bad configuration (needs a person),
 // 130/143 stopped by SIGINT/SIGTERM after closing the Harness.
 import { existsSync, statSync } from "node:fs";

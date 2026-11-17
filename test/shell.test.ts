@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, type TestContext } from "node:test";
-import { createModels } from "@earendil-works/pi-ai/models";
+import { createModels, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { Effect } from "effect";
@@ -111,7 +111,7 @@ describe("chooseModel", () => {
 		assert.deepEqual((await Effect.runPromise(chooseModel())).model, FAUX_MODEL);
 	});
 
-	it("defaults reasoning models to medium and rejects unknown or unsupported levels", async () => {
+	it("defaults to supported effort and identifies the source of explicitly unsupported levels", async () => {
 		const faux = fauxProvider({ models: [{ id: "reasoner", reasoning: true }] });
 		const models = createModels();
 		models.setProvider(faux.provider);
@@ -119,14 +119,30 @@ describe("chooseModel", () => {
 		assert.equal(await Effect.runPromise(chooseThinking(choice)), "medium");
 		assert.equal(await Effect.runPromise(chooseThinking(choice, "high")), "high");
 		for (const level of ["xhigh", "typo", ""]) {
-			assert.ok(await Effect.runPromise(Effect.flip(chooseThinking(choice, level))) instanceof InvalidModel);
+			const error = await Effect.runPromise(Effect.flip(chooseThinking(choice, level)));
+			assert.ok(error instanceof InvalidModel);
+			assert.match(error.message, /GALANGAN_THINKING/);
 		}
+		const error = await Effect.runPromise(Effect.flip(chooseThinking({ ...choice, thinkingLevel: "xhigh" })));
+		assert.match(error.message, /choice.thinkingLevel/);
+		assert.doesNotMatch(error.message, /GALANGAN_THINKING/);
 		assert.ok(await Effect.runPromise(Effect.flip(chooseModel("faux", "medium"))) instanceof InvalidModel);
 		// Catalog-only validation: no authentication or network. Sol cannot run with Pi's old default of off.
 		models.setProvider(openaiProvider());
 		const sol = { models, model: { provider: "openai", modelId: "gpt-6.1-sol" } };
 		assert.ok(await Effect.runPromise(Effect.flip(chooseThinking(sol, "off"))) instanceof InvalidModel);
 		assert.equal(await Effect.runPromise(chooseThinking(sol, "high")), "high");
+		// Includes off/high/max and high-only reasoners; medium must never be an implicit configuration error.
+		const { builtinProviders } = await import("@earendil-works/pi-ai/providers/all");
+		for (const provider of builtinProviders()) {
+			models.setProvider(provider);
+			for (const model of provider.getModels()) {
+				const choice = { models, model: { provider: provider.id, modelId: model.id } };
+				const selected = await Effect.runPromise(chooseThinking(choice));
+				assert.ok(getSupportedThinkingLevels(model).includes(selected),
+					`${provider.id}/${model.id}: ${selected}`);
+			}
+		}
 	});
 
 	it("refuses a spec without a provider and model", async () => {

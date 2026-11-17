@@ -2,14 +2,15 @@
 // Reports committed model/effort/usage, never credentials or private reasoning. Refuses to reuse a previous smoke store.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { AssistantEntry, ToolResultEntry } from "@earendil-works/pi-durable";
+import { AssistantEntry, defineExtension, GenerationTask, hook, ToolResultEntry } from "@earendil-works/pi-durable";
 import { Effect } from "effect";
 import { defineHarness } from "../src/harness.ts";
 import { Tallies, tallyHarness } from "../src/harnesses/tally.ts";
-import { helper } from "../src/kit/helper.ts";
+import { helper } from "../src/helper.ts";
 import { chooseModel, REAL_MODEL } from "../src/models.ts";
 import { Shell } from "../src/shell.ts";
 
@@ -17,8 +18,7 @@ if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is missing from
 if (!process.env.OPENAI_API_KEY.startsWith("sk-")) throw new Error("OPENAI_API_KEY must be an sk- API key, not a ChatGPT token");
 
 if (process.argv[2] !== "--stage") {
-	mkdirSync(".amp/in/orb-backup", { recursive: true });
-	const dir = resolve(process.argv[2] ?? mkdtempSync(".amp/in/orb-backup/real-model-smoke-"));
+	const dir = resolve(process.argv[2] ?? mkdtempSync(join(tmpdir(), "galangan-real-model-smoke-")));
 	assert.equal(existsSync(join(dir, "smoke.sqlite")), false, "smoke requires a fresh store");
 	console.log(`SMOKE store=${dir}`);
 	for (const stage of ["first", "restart"]) {
@@ -35,7 +35,22 @@ if (process.argv[2] !== "--stage") {
 	const stage = process.argv[3]!;
 	const store = join(process.argv[4]!, "smoke.sqlite");
 	const choice = await Effect.runPromise(chooseModel("real"));
-	const spec = defineHarness({ name: "real-smoke", extensions: [...tallyHarness.extensions, helper()] });
+	// Offering only delegate still allows a text answer. Force its first call only during the restricted helper probe.
+	const requireDelegate = defineExtension({
+		name: "smoke.require-delegate",
+		hooks: [hook(GenerationTask, { beforeProviderRequest: ({ payload }) => {
+			const body = payload as {
+				tools?: { name?: string }[];
+				input: { type?: string; name?: string }[];
+			};
+			if (body.tools?.length !== 1 || body.tools[0]?.name !== "delegate") return;
+			const delegated = body.input.some((item) => item.type === "function_call" && item.name === "delegate");
+			return { payload: {
+				...body, tool_choice: delegated ? "auto" : { type: "function", name: "delegate" }, parallel_tool_calls: false,
+			} };
+		} })],
+	});
+	const spec = defineHarness({ name: "real-smoke", extensions: [...tallyHarness.extensions, helper(), requireDelegate] });
 	console.log(`STAGE ${stage} pid=${process.pid}`);
 	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
 		const root = await shell.harness.root(context);
@@ -57,14 +72,27 @@ if (process.argv[2] !== "--stage") {
 				'Call tally exactly once with label "real-smoke" and report the count. Do not delegate this easy request.',
 				"smoke:restart",
 			)}`);
-			const findings = await ask(
-				"Integration check: call delegate exactly once with this self-contained reasoning task: " +
-				"How many integers from 1 through 500 are divisible by 7 or 11 but not both? Check the overlap. " +
-				"Then write your own short answer from its findings. Do not tally for this request.",
-				"smoke:helper",
-			);
-			assert.match(findings, /\b104\b/); // 71 + 45 - 2 × 6, independently derived.
-			console.log(`ANSWER ${findings}`);
+			const delegate = agent.tools.find((tool) => tool.name === "delegate")!;
+			await root.configure({ modelTools: [delegate] }, context);
+			try {
+				const findings = await ask(
+					"Integration check: call delegate exactly once with this self-contained reasoning task: " +
+					"How many integers from 1 through 500 are divisible by 7 or 11 but not both? Check the overlap. " +
+					"Then write your own short answer from its findings.",
+					"smoke:helper",
+				);
+				const entries = await root.entries({ order: "ascending" }, 100, undefined, context);
+				const results = entries.items.filter(ToolResultEntry.is).flatMap((entry) => entry.model ?? [])
+					.filter((message) => message.role === "toolResult")
+					.filter((message) => message.toolName === "delegate");
+				assert.ok(results.length > 0, "model did not delegate");
+				assert.equal(results.length, 1, "expected exactly one delegate result");
+				assert.equal(results[0]!.isError, false, "delegate failed");
+				assert.match(findings, /\b104\b/); // 71 + 45 - 2 × 6, independently derived.
+				console.log(`ANSWER ${findings}`);
+			} finally {
+				await root.configure({ modelTools: null }, context);
+			}
 			// Exercise a real configuration_update on the existing transcript, not just an initial reasoning setting.
 			await root.configure({ thinkingLevel: "high" }, context);
 			console.log(`EFFORT UPDATE ANSWER ${await ask("Reply with exactly: effort update accepted", "smoke:effort")}`);
@@ -84,7 +112,8 @@ if (process.argv[2] !== "--stage") {
 			const child = record.id !== root.id;
 			if (child) {
 				const childAgent = await conversation.agent(context);
-				assert.equal(childAgent.tools.some((tool) => tool.name === "delegate"), false);
+				assert.deepEqual(childAgent.extensions, []);
+				assert.deepEqual(childAgent.tools, []);
 			}
 			for (const entry of entries.items) {
 				for (const message of entry.model ?? []) {

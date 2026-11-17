@@ -45,8 +45,11 @@ One change on `main`:
 
 1. Bump the one Galangan version the harness depends on.
 2. Fix the `tsc` errors, guided by the `Migration:` lines.
-3. Run the harness's conformance tests against a copy of the production store.
-4. Stop the process and back up the store: copy the SQLite file and its WAL while no process holds it.
+3. Stop the process and back up the store: copy the SQLite file and its WAL while no process holds it. A copy of a
+   running store can be torn between the two files.
+4. Run the harness's conformance tests against that backup: `conformance(harness, { from })` from `galangan/testing`,
+   with `from` the backup (for example `from: process.env.CONFORMANCE_FROM`, run as `CONFORMANCE_FROM=<backup> npm
+   test`). Each case works on its own copy, so the backup stays as it was.
 5. Deploy. The first open by the new version also copies the store to `<store>.<UTC time>.bak` beside it.
 
 Roll back by restoring that backup with the old version, never by running the old version on a migrated store. A

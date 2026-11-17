@@ -87,18 +87,30 @@ configuration, including a missing store or one a newer build wrote (needs a per
 ## Build a harness
 
 A harness imports Galangan only through its two public entries: `galangan` (the shell, `runCli`, `defineHarness`,
-`helper`, model choice and errors) and `galangan/testing` (the faux model and `tempStore(t)`). Everything else under
-`src/` is internal; `exports` in `package.json` refuses deep imports. [`examples/tally/`](examples/tally) is the
-reference harness and follows that rule (a test checks it).
+`helper`, model choice and errors) and `galangan/testing` (the faux model, `tempStore(t)` and `conformance`).
+Everything else under `src/` is internal; `exports` in `package.json` refuses deep imports.
+[`examples/tally/`](examples/tally) is the reference harness and follows that rule (a test checks it).
 
 1. Copy [`examples/tally/`](examples/tally) for your harness: `tally.ts`, `main.ts` and `tally.test.ts`.
 2. Put your tools, sections, hooks and tasks in its extensions, and give it a name with `defineHarness`.
 3. `main.ts` passes your harnesses to `runCli([...])`, which is the whole CLI above; `GALANGAN_HARNESS` picks among
    them.
+4. Keep `conformance(myHarness)` in its test, as `tally.test.ts` does.
 
-Doc kinds and extension names starting `galangan.` are reserved for the shell, because Pi does not check kind
-collisions; use your harness's own prefix, as tally uses `tally.`. Pi, pi-ai, chord, pi-schema and Effect are exact
-peer dependencies, so a harness gets the same copies the shell runs on.
+`conformance(spec)` from `galangan/testing` registers the shell's durability promise as node:test cases over real
+SQLite and the faux model, run through your harness's own extensions plus a probe extension: committed tool state
+survives a close and reopen, every commit is written with `synchronous = FULL`, a repeated request ID is one input
+even after a reopen, and a tool that is not replay-safe, cut off mid-call, returns `interrupted` and is not run again.
+Before an upgrade, run it on the backup of production's store, taken with the process stopped: each case copies that
+file (and its WAL) and never opens the original, and one more case checks that the copy starts from its history. To
+pass the path without editing the test, keep it as `conformance(myHarness, { from: process.env.CONFORMANCE_FROM })`
+and run `CONFORMANCE_FROM=<backup> npm test`. When a harness finds a way to lose durability,
+the fix adds a case here, so every harness runs it on its next bump.
+
+Doc kinds and extension names starting `galangan.`, and tool names starting `galangan_`, are reserved for the shell,
+because Pi does not check collisions (a later extension's tool silently replaces an earlier one of the same name); use
+your harness's own prefix, as tally uses `tally.`. Pi, pi-ai, chord, pi-schema and Effect are exact peer dependencies,
+so a harness gets the same copies the shell runs on.
 
 A harness repo installs Galangan with npm as a git dependency pinned to a commit, plus the exact peers from
 [Pins](#pins). The ampcode.com remote needs Amp git credentials (an orb has them); pnpm also needs `galangan` in its
@@ -189,7 +201,8 @@ are errors, not silently removed.
 | `src/cli.ts` | `runCli(harnesses)`: the CLI, harness selection, exit codes and signals |
 | `examples/tally/` | The reference harness: `tally.ts`, its CLI `main.ts` (`npm start`) and its test, on public entries only |
 | `src/helper.ts` | Opt-in bounded foreground helper (Sol high by default) |
-| `test/shell.test.ts` | The shell over a real SQLite file: tool state across a reopen, request ID dedup, missing and locked stores, the stamp and backups, model choice |
+| `test/shell.test.ts` | The shell over a real SQLite file: missing and locked stores, model changes, the stamp and backups, model choice |
+| `test/conformance.test.ts` | `conformance` on a copy of an existing store, which it leaves untouched (tally's own test runs it on new stores) |
 | `test/store.test.ts` | The CLI as processes: one default store from any directory, `--init` (once), the old `./data` hint, a second process refused, a newer store refused |
 | `test/main.test.ts` | The CLI as a child process: an unanswered line does not end the session; SIGINT/SIGTERM close the Harness |
 | `test/helper.test.ts` | Faux-only helper findings, limits, no recursion and restart recovery |

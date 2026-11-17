@@ -10,6 +10,15 @@ open, after backing the store up. Existing tally counts are not carried over (se
 
 ### Added
 
+- Conformance cases (BIJAN-149): `conformance(spec, { from? })` in `galangan/testing` registers node:test cases a
+  harness runs against its own spec, offline, over real SQLite: state survives a close and reopen, commits use
+  `synchronous = FULL`, a repeated request ID is answered once (also after a reopen), and a non-replay-safe tool cut
+  off mid-call returns `interrupted` without running again. `from` runs every case on a copy of an existing store
+  that no process holds, and checks the copy starts from its history, for the upgrade step in
+  docs/pin-and-release-policy.md. Tool names starting `galangan_` are now reserved for the shell, like `galangan.`
+  doc kinds and extension names. Tally runs it; the generic reopen and request ID cases moved
+  there from `test/shell.test.ts`.
+  Migration: add `conformance(myHarness)` to the harness's tests.
 - Store stamp (BIJAN-150): every open records the Galangan and Pi versions in a `galangan_store` table. A store
   stamped by a newer Galangan or Pi, or at a newer Pi schema, fails with `StoreIncompatible` (CLI exit 78) naming both
   versions. An open that upgrades a store first copies it to `<store>.<UTC time>.bak`, so a rollback restores that

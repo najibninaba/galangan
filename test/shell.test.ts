@@ -28,33 +28,8 @@ const withShell = <A, E>(store: string, program: Effect.Effect<A, E, Shell>, cre
 	Effect.runPromise(Effect.provide(program, layer(store, create)));
 
 describe("shell", () => {
-	it("answers through the harness's tool and keeps its state across a reopen", async (t) => {
-		const store = tempStore(t);
-		const first = await withShell(store, Effect.gen(function* () {
-			const shell = yield* Shell;
-			return [
-				yield* shell.ask("hello"),
-				yield* shell.ask('call tally {"label":"cups"}'),
-				yield* shell.ask('call tally {"label":"cups"}'),
-				yield* shell.ask('call tally {"label":"plates"}'),
-			];
-		}), true);
-		assert.deepEqual(first, ["ack: hello", "tally: cups = 1", "tally: cups = 2", "tally: plates = 1"]);
-
-		const reopened = await withShell(store, Shell.use((shell) => shell.ask('call tally {"label":"cups"}')));
-		assert.equal(reopened, "tally: cups = 3");
-	});
-
-	it("treats a repeated request ID as one input", async (t) => {
-		const store = tempStore(t);
-		const answers = await withShell(store, Effect.gen(function* () {
-			const shell = yield* Shell;
-			const once = yield* shell.ask('call tally {"label":"cups"}', { requestId: "r-1" });
-			const again = yield* shell.ask('call tally {"label":"cups"}', { requestId: "r-1" });
-			const next = yield* shell.ask('call tally {"label":"cups"}', { requestId: "r-2" });
-			return [once, again, next];
-		}), true);
-		assert.deepEqual(answers, ["tally: cups = 1", "tally: cups = 1", "tally: cups = 2"]);
+	it("answers a message that calls no tool", async (t) => {
+		assert.equal(await withShell(tempStore(t), Shell.use((shell) => shell.ask("hello")), true), "ack: hello");
 	});
 
 	it("refuses a missing store unless asked to create it, and creates nothing", async (t) => {

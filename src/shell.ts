@@ -205,12 +205,27 @@ async function open(spec: HarnessSpec, choice: ModelChoice, store: string, db: S
 		await storage.close(context).catch(() => {});
 		throw error;
 	}
-	return Harness.open(storage, {
+	const harness = await Harness.open(storage, {
 		models: choice.models,
 		registry,
 		settings: { extensions: spec.extensions, afterFailedRun: "withdraw" },
 		onReport: (report) => console.error(`[galangan:${spec.name}] ${report.kind}: ${String(report.error)}`),
 	}, context);
+	connections.set(harness, db);
+	return harness;
+}
+
+/** The connection under each open Harness. Pi keeps it private; only `synchronous` reads it. */
+const connections = new WeakMap<Harness, SqliteDatabase>();
+
+/**
+ * Internal, for galangan/testing's conformance suite: `PRAGMA synchronous` (2 is FULL) on the connection Pi writes
+ * through, so the suite checks what the store really runs with rather than the code that meant to set it.
+ */
+export async function synchronous(harness: Harness): Promise<number | undefined> {
+	const db = connections.get(harness);
+	if (db === undefined) throw new Error("not a Harness the shell opened");
+	return (await db.get<{ synchronous: number }>("PRAGMA synchronous"))?.synchronous;
 }
 
 const STAMP = "galangan_store";

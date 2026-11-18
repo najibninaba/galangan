@@ -251,8 +251,10 @@ assistant text, not thinking, images, tool results, or Pi's context markers.
 
 - `recall({ regex })` searches with a case-insensitive JavaScript regular expression and returns excerpts newest
   first, each with its `zoom` call. Each call scans at most 256 raw entries, including entries with no printable text.
-  Copy the footer's `before` to continue below that entry, even if the page had no matches. If the search times out,
-  try a simpler pattern. Matching runs off the harness thread with a one-second deadline per call.
+  Entries over 131,072 UTF-16 code units are marked `Not searched` with their `zoom` calls; splitting them could
+  change what the regex matches. Copy the footer's `before` to continue below that entry, even on a page with no
+  matches. Matching runs off the harness thread with a one-second deadline per call and at most two matchers at
+  once. Retry the same call if busy, or try a simpler pattern if the search times out.
 - `zoom({ entry })` opens one entry. `zoom({ range: { from, to } })` opens both endpoints inclusively, oldest first.
   Text between matching `[transcript N]` and `[/transcript N]` markers is quoted history. For long results, copy
   the continuation footer's arguments, including any `offset`, from outside the transcript blocks.

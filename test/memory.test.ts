@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { it } from "node:test";
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { awaitWithContext, BACKGROUND_CONTEXT as context, withAbortSignal } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import {
@@ -189,6 +189,97 @@ it("bounds recall scans with no hits and stops a catastrophic JavaScript regex",
 		assert.match(output, /Regex match timed out\. Try a simpler regex\./);
 		const elapsed = performance.now() - started;
 		assert.ok(elapsed < 3_000, `catastrophic recall took ${Math.round(elapsed)}ms`);
+	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
+});
+
+it("reports an oversized entry without losing matches or the continuation past it", async (t) => {
+	const harness = defineHarness({ name: "recall-oversized", extensions: [memory()], formats: { ...memoryFormats } });
+	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
+		const root = await shell.harness.root(context);
+		await root.configure({ compaction: { enabled: false } }, context);
+		const archive = (await send(root, "ArchiveHit")).entry;
+		const large = await root.commit(async (tx) => {
+			const entry = await tx.appendEntry(root.id, { kind: "fixture.input", model: [{
+				role: "user", timestamp: 0,
+				content: [
+					{ type: "text", text: "界".repeat(65_536) },
+					{ type: "text", text: "界".repeat(65_536) + "TailHit" },
+				],
+			}] });
+			for (let i = 0; i < 254; i++) await tx.appendEntry(root.id, { kind: "fixture.passive" });
+			return entry.id;
+		}, context);
+		const recent = (await send(root, "RecentHit")).entry;
+		const regex = "^ArchiveHit$|TailHit$|^RecentHit$";
+		const { body, next } = part(await call(root, "recall", { regex, before: recent + 1 }), "recall");
+		assert.deepEqual(body.split("\n"), [
+			`zoom({"entry":${recent}}) | user | RecentHit`,
+			`Not searched (entry too large): zoom({"entry":${large}})`,
+		]);
+		assert.deepEqual(next, { regex, before: large });
+		assert.equal(await call(root, "recall", next!), `zoom({"entry":${archive}}) | user | ArchiveHit`);
+		const { body: opened } = part(await call(root, "zoom", { entry: large, offset: 131_072 }), "zoom");
+		assert.deepEqual(zoomBlocks(opened), [{ entry: large, role: "user", text: "TailHit" }]);
+	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
+});
+
+it("limits concurrent matchers and releases a slot when the caller aborts a queued scan", async (t) => {
+	const kit = memory();
+	const holds = [1, 2, 2].map((page) => ({
+		page, cancel: new AbortController(), queued: Promise.withResolvers<AbortSignal>(),
+	}));
+	const byConversation = new Map<Conversation["id"], (typeof holds)[number]>();
+	const release = Promise.withResolvers<void>();
+	const gatedKit = { ...kit, tools: kit.tools?.map((tool) => ({
+		...tool,
+		async execute(...[args, api, ctx]: Parameters<typeof tool.execute>) {
+			const hold = byConversation.get(api.conversationId);
+			if (hold === undefined) return tool.execute(args, api, ctx);
+			let scans = 0;
+			return tool.execute(args, {
+				...api,
+				commit(change, scanContext, options) {
+					if (++scans !== hold.page) return api.commit(change, scanContext, options);
+					// Stand in for a Pi commit still waiting for its turn, even after its context is aborted.
+					hold.queued.resolve(scanContext.abortSignal!);
+					return release.promise.then(() => api.commit(change, scanContext, options));
+				},
+			}, withAbortSignal(hold.cancel.signal, ctx));
+		},
+	})) };
+	const harness = defineHarness({ name: "recall-queue", extensions: [gatedKit], formats: { ...memoryFormats } });
+	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
+		const root = await shell.harness.root(context);
+		await root.commit(async (tx) => {
+			for (let i = 0; i < 65; i++) await tx.appendEntry(root.id, { kind: "fixture.passive" });
+		}, context);
+		const recent = (await send(root, "Match me")).entry;
+		const args = { regex: "Match me", before: recent + 1 };
+		const forks = await Promise.all(holds.map(() => root.fork(recent, { ownership: { kind: "ownerless" } }, context)));
+		const started: Promise<string>[] = [];
+		const testContext = withAbortSignal(AbortSignal.timeout(3_000), context);
+		try {
+			for (const [i, hold] of holds.entries()) {
+				const fork = forks[i]!;
+				byConversation.set(fork.id, hold);
+				const result = call(fork, "recall", args, true);
+				void result.catch(() => {});
+				started.push(result);
+				await awaitWithContext(hold.queued.promise, testContext);
+			}
+			// The first blocked scan must not have used a slot; both later calls reached their second scan.
+			assert.match(await call(root, "recall", args, true), /Recall is busy\. Retry the same call\./);
+			const midScan = holds[1]!;
+			midScan.cancel.abort(new Error("Cancelled the queued scan"));
+			assert.ok((await midScan.queued.promise).aborted, "the Pi commit receives the abort too");
+			assert.match(await awaitWithContext(started[1]!, testContext), /Cancelled the queued scan/);
+			// The gated commit has not finished, but this caller can reserve the cancelled caller's slot.
+			assert.equal(await call(root, "recall", args), `zoom({"entry":${recent}}) | user | Match me`);
+		} finally {
+			for (const hold of holds) hold.cancel.abort();
+			release.resolve();
+			await Promise.allSettled(started);
+		}
 	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
 });
 

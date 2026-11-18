@@ -2,7 +2,7 @@
 // Frozen names: galangan.memory (also the format key), recall and zoom.
 import { once } from "node:events";
 import { Worker } from "node:worker_threads";
-import { withAbortSignal, type Context } from "@earendil-works/chord/context";
+import { awaitWithContext, withAbortSignal, type Context } from "@earendil-works/chord/context";
 import { boundOutput, utf8ByteLength } from "@earendil-works/chord/output";
 import {
 	CompactionEntry, defineExtension, defineTool, ResetEntry,
@@ -17,6 +17,10 @@ export const memoryFormats = Object.freeze({ [name]: 1 } as const);
 const scanPageSize = 64;
 const recallScanLimit = 256;
 const recallDeadlineMs = 1_000;
+// A send carries one string, at most 256 KiB of UTF-16 data before serialization overhead.
+const recallTextLimit = 128 * 1024;
+const recallWorkerLimit = 2;
+let activeRecallWorkers = 0;
 const outputLimits = { maxBytes: 12_000, maxLines: 240, retain: "head" } as const;
 const entryId = int({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
 const discover = `Try recall({"regex":"keyword"}) with a word from the message.`;
@@ -28,27 +32,47 @@ async function* entryPages(
 	let cursor: Cursor | undefined;
 	do {
 		// Only the scan holds Pi's write line; extraction, regex and rendering run after the read-only commit returns.
-		const page = await api.commit((tx) => tx.scanEntries(query, Math.min(scanPageSize, remaining), cursor), context);
+		// Pi may not settle a queued commit on abort. Stop waiting independently so worker cleanup can run.
+		context.abortSignal?.throwIfAborted();
+		const page = await awaitWithContext(
+			api.commit((tx) => tx.scanEntries(query, Math.min(scanPageSize, remaining), cursor), context), context,
+		);
 		yield page;
 		remaining -= page.items.length;
 		cursor = page.next;
 	} while (cursor !== undefined && remaining > 0);
 }
 
-function messageText(entry: EntryRecord) {
+type MessageText = { id: EntryId; role: string; text: string };
+const oversized = Symbol("oversized");
+
+function messageText(entry: EntryRecord): MessageText | undefined;
+function messageText(entry: EntryRecord, limit: number): MessageText | typeof oversized | undefined;
+function messageText(entry: EntryRecord, limit = Infinity): MessageText | typeof oversized | undefined {
 	// Include harness-specific input kinds, but not Pi's synthetic user messages at context boundaries.
 	if (CompactionEntry.is(entry) || ResetEntry.is(entry) || entry.model === undefined) return undefined;
 	const texts: string[] = [];
 	const roles = new Set<string>();
+	let units = 0;
 	for (const message of entry.model) {
 		if (message.role !== "user" && message.role !== "assistant") continue;
-		const text = typeof message.content === "string" ? message.content : message.content
-			.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
-		if (text === "") continue;
-		texts.push(text);
-		roles.add(message.role);
+		const parts = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
+		let first = true;
+		for (const part of parts) {
+			if (part.type !== "text" || part.text === "") continue;
+			if (first && texts.length > 0) {
+				texts.push("\n");
+				units++;
+			}
+			units += part.text.length;
+			// Reject before joining potentially huge multipart content on the harness thread.
+			if (units > limit) return oversized;
+			texts.push(part.text);
+			roles.add(message.role);
+			first = false;
+		}
 	}
-	return texts.length === 0 ? undefined : { id: entry.id, role: [...roles].join("/"), text: texts.join("\n") };
+	return texts.length === 0 ? undefined : { id: entry.id, role: [...roles].join("/"), text: texts.join("") };
 }
 
 function reply(text: string): ToolExecutionResult {
@@ -59,7 +83,7 @@ function zoomRef(entry: number) {
 	return `zoom(${JSON.stringify({ entry })})`;
 }
 
-function recallLine({ id, role, text }: NonNullable<ReturnType<typeof messageText>>, match: number) {
+function recallLine({ id, role, text }: MessageText, match: number) {
 	let start = Math.max(0, match - 64);
 	if ((text.codePointAt(start - 1) ?? 0) > 0xffff) start--;
 	let end = match + 640;
@@ -76,7 +100,8 @@ const recall = defineTool({
 	description: "Search raw user and assistant text on this branch, including before compaction. " +
 		"Use a case-insensitive JavaScript regex without slash delimiters (1–256 characters). Newest matches first. " +
 		"Open a match with its zoom call. Copy the footer's regex and exclusive before entry ID to keep searching, " +
-		"even on a page with no matches. If a regex times out, try a simpler one.",
+		"even on a page with no matches. If an entry is marked Not searched, open its zoom call to inspect it. " +
+		"If a regex times out, try a simpler one.",
 	parameters: obj({ regex: str(), before: opt(entryId) }),
 	replay: "safe",
 	outputLimits,
@@ -94,38 +119,43 @@ const recall = defineTool({
 		let last: EntryId | undefined;
 		let more = false;
 		const deadline = AbortSignal.timeout(recallDeadlineMs);
-		const scanContext = withAbortSignal(deadline, context);
+		const failed = new AbortController();
+		const scanContext = withAbortSignal(AbortSignal.any([deadline, failed.signal]), context);
+		const signal = scanContext.abortSignal!;
+		let worker: Worker | undefined;
 		try {
-			// The pattern is data, not worker source. A stuck native match must be terminable off the harness thread.
-			await using worker = new Worker(`
-				const { parentPort, workerData } = require("node:worker_threads");
-				const pattern = new RegExp(workerData, "iu");
-				parentPort.on("message", (texts) => {
-					parentPort.postMessage(texts.map((text) => text === undefined ? null : pattern.exec(text)?.index ?? null));
-				});
-			`, { eval: true, workerData: regex, env: {}, execArgv: [] });
-			const failed = new AbortController();
-			worker.once("error", (error) => failed.abort(error));
-			worker.once("exit", (code) => failed.abort(new Error(`Recall matcher exited (${code}).`)));
-			const signal = AbortSignal.any([scanContext.abortSignal!, failed.signal]);
 			for await (const page of entryPages(api, scanContext, {
 				order: "descending", maxEntryId: before === undefined ? undefined : (before - 1) as EntryId,
 			}, recallScanLimit)) {
-				const entries = page.items.map(messageText);
-				let indices: Array<number | null> = [];
-				if (entries.some(Boolean)) {
+				for (const raw of page.items) {
+					const { id } = raw;
 					signal.throwIfAborted();
-					const response = once(worker, "message", { signal });
-					worker.postMessage(entries.map((entry) => entry?.text));
-					[indices] = await response as [Array<number | null>];
-				}
-				for (const [i, { id }] of page.items.entries()) {
-					const match = indices[i];
-					if (match != null) {
-						const line = recallLine(entries[i]!, match);
+					const entry = messageText(raw, recallTextLimit);
+					let line: string | undefined;
+					if (entry === oversized) {
+						line = `Not searched (entry too large): ${zoomRef(id)}\n`;
+					} else if (entry !== undefined) {
+						if (worker === undefined) {
+							if (activeRecallWorkers >= recallWorkerLimit) throw new Error("Recall is busy. Retry the same call.");
+							// Pass the pattern as data; a stuck native match is terminable off the harness thread.
+							worker = new Worker(`
+								const { parentPort, workerData } = require("node:worker_threads");
+								const pattern = new RegExp(workerData, "iu");
+								parentPort.on("message", (text) => parentPort.postMessage(pattern.exec(text)?.index ?? null));
+							`, { eval: true, workerData: regex, env: {}, execArgv: [] });
+							activeRecallWorkers++;
+							worker.once("error", (error) => failed.abort(error));
+							worker.once("exit", (code) => failed.abort(new Error(`Recall matcher exited (${code}).`)));
+						}
+						const response = once(worker, "message", { signal });
+						worker.postMessage(entry.text);
+						const [match] = await response as [number | null];
+						if (match !== null) line = recallLine(entry, match);
+					}
+					if (line !== undefined) {
 						const size = utf8ByteLength(line);
 						if (last !== undefined && (bytes + size > budget || rows.length === outputLimits.maxLines - 1)) {
-							// The match that did not fit is not consumed; it belongs on the next result page.
+							// Unprinted matches and notices belong on the next result page.
 							return reply(rows.join("") + continuation(last));
 						}
 						rows.push(line);
@@ -139,6 +169,11 @@ const recall = defineTool({
 			context.abortSignal?.throwIfAborted();
 			if (deadline.aborted) throw new Error(`Regex match timed out. Try a simpler regex. ${discover}`);
 			throw error;
+		} finally {
+			if (worker !== undefined) {
+				await worker.terminate();
+				activeRecallWorkers--;
+			}
 		}
 		if (more && last !== undefined) {
 			return reply((rows.length === 0 ? "No matches on this page.\n" : rows.join("")) + continuation(last));

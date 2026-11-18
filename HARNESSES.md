@@ -4,4 +4,4 @@ Each harness repo built on Galangan, the release it pins and its owner. Galangan
 
 | Harness | Repository | Galangan | Owner |
 |---|---|---|---|
-| kirim | https://ampcode.com/@najib/kirim | v0.2.2 | Najib Ninaba |
+| kirim | https://ampcode.com/@najib/kirim | v0.2.3 | Najib Ninaba |

@@ -250,11 +250,10 @@ compaction removed from active context, including inherited messages up through 
 assistant text, not thinking, images, tool results, or Pi's context markers.
 
 - `recall({ regex })` searches with a case-insensitive JavaScript regular expression and returns excerpts newest
-  first, each with its `zoom` call. Each call scans at most 256 raw entries, including entries with no printable text.
-  Entries over 131,072 UTF-16 code units are marked `Not searched` with their `zoom` calls; splitting them could
-  change what the regex matches. Copy the footer's `before` to continue below that entry, even on a page with no
-  matches. Matching runs off the harness thread with a one-second deadline per call and at most two matchers at
-  once. Retry the same call if busy, or try a simpler pattern if the search times out.
+  first, each with its `zoom` call. Scans and concurrent matchers are bounded. Oversized entries are marked
+  `Not searched` with their `zoom` calls. Copy the footer's `before` to continue below that entry, even on a page
+  with no matches. Retry only busy `recall` calls, one per tool round starting with the next round. If the call
+  times out waiting for history, retry with the same arguments. If matching times out, try a simpler pattern.
 - `zoom({ entry })` opens one entry. `zoom({ range: { from, to } })` opens both endpoints inclusively, oldest first.
   Text between matching `[transcript N]` and `[/transcript N]` markers is quoted history. For long results, copy
   the continuation footer's arguments, including any `offset`, from outside the transcript blocks.

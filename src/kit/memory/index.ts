@@ -100,8 +100,7 @@ const recall = defineTool({
 	description: "Search raw user and assistant text on this branch, including before compaction. " +
 		"Use a case-insensitive JavaScript regex without slash delimiters (1–256 characters). Newest matches first. " +
 		"Open a match with its zoom call. Copy the footer's regex and exclusive before entry ID to keep searching, " +
-		"even on a page with no matches. If an entry is marked Not searched, open its zoom call to inspect it. " +
-		"If a regex times out, try a simpler one.",
+		"even on a page with no matches. If an entry is marked Not searched, open its zoom call to inspect it.",
 	parameters: obj({ regex: str(), before: opt(entryId) }),
 	replay: "safe",
 	outputLimits,
@@ -123,6 +122,7 @@ const recall = defineTool({
 		const scanContext = withAbortSignal(AbortSignal.any([deadline, failed.signal]), context);
 		const signal = scanContext.abortSignal!;
 		let worker: Worker | undefined;
+		let waitingForMatch = false;
 		try {
 			for await (const page of entryPages(api, scanContext, {
 				order: "descending", maxEntryId: before === undefined ? undefined : (before - 1) as EntryId,
@@ -136,7 +136,10 @@ const recall = defineTool({
 						line = `Not searched (entry too large): ${zoomRef(id)}\n`;
 					} else if (entry !== undefined) {
 						if (worker === undefined) {
-							if (activeRecallWorkers >= recallWorkerLimit) throw new Error("Recall is busy. Retry the same call.");
+							if (activeRecallWorkers >= recallWorkerLimit) {
+								throw new Error("Recall is busy. Retry only the busy recall calls, one per tool round " +
+									"starting with the next round. Reuse the original arguments.");
+							}
 							// Pass the pattern as data; a stuck native match is terminable off the harness thread.
 							worker = new Worker(`
 								const { parentPort, workerData } = require("node:worker_threads");
@@ -149,7 +152,9 @@ const recall = defineTool({
 						}
 						const response = once(worker, "message", { signal });
 						worker.postMessage(entry.text);
+						waitingForMatch = true;
 						const [match] = await response as [number | null];
+						waitingForMatch = false;
 						if (match !== null) line = recallLine(entry, match);
 					}
 					if (line !== undefined) {
@@ -167,7 +172,10 @@ const recall = defineTool({
 			}
 		} catch (error) {
 			context.abortSignal?.throwIfAborted();
-			if (deadline.aborted) throw new Error(`Regex match timed out. Try a simpler regex. ${discover}`);
+			if (deadline.aborted && signal.reason === deadline.reason) {
+				throw new Error(waitingForMatch ? `Regex match timed out. Try a simpler regex. ${discover}`
+					: "Recall timed out waiting for history. Retry this call with the same arguments.");
+			}
 			throw error;
 		} finally {
 			if (worker !== undefined) {

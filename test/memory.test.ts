@@ -223,7 +223,7 @@ it("reports an oversized entry without losing matches or the continuation past i
 	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
 });
 
-it("limits concurrent matchers and releases a slot when the caller aborts a queued scan", async (t) => {
+it("distinguishes busy matchers from queued history timeouts and frees a slot on cancellation", async (t) => {
 	const kit = memory();
 	const holds = [1, 2, 2].map((page) => ({
 		page, cancel: new AbortController(), queued: Promise.withResolvers<AbortSignal>(),
@@ -268,13 +268,19 @@ it("limits concurrent matchers and releases a slot when the caller aborts a queu
 				await awaitWithContext(hold.queued.promise, testContext);
 			}
 			// The first blocked scan must not have used a slot; both later calls reached their second scan.
-			assert.match(await call(root, "recall", args, true), /Recall is busy\. Retry the same call\./);
+			assert.match(await call(root, "recall", args, true),
+			/Recall is busy\. Retry only the busy recall calls, one per tool round starting with the next round\./);
 			const midScan = holds[1]!;
 			midScan.cancel.abort(new Error("Cancelled the queued scan"));
 			assert.ok((await midScan.queued.promise).aborted, "the Pi commit receives the abort too");
 			assert.match(await awaitWithContext(started[1]!, testContext), /Cancelled the queued scan/);
 			// The gated commit has not finished, but this caller can reserve the cancelled caller's slot.
 			assert.equal(await call(root, "recall", args), `zoom({"entry":${recent}}) | user | Match me`);
+		// The wait can time out before the matcher starts or between batches, after it has matched successfully.
+		for (const result of [started[0]!, started[2]!]) {
+			assert.match(await awaitWithContext(result, testContext),
+				/Recall timed out waiting for history\. Retry this call with the same arguments\./);
+		}
 		} finally {
 			for (const hold of holds) hold.cancel.abort();
 			release.resolve();

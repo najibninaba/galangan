@@ -97,7 +97,7 @@ git rebase origin/main && npm run ci && git push -u origin main
 
 Outside an orb, `amp projects create --push --personal --name <name>` from the new repo's root is meant to do this in one step; it has not been tried yet.
 
-Orbs for the project run `.agents/setup` on their own, so it needs no pre-setup script. Confirm the push with `git ls-remote origin main`, which must print your `HEAD`, and `amp projects status` from the new repo's root: it prints the project its git remote matches, and that project's URL is the repository URL for the registry.
+Orbs for the project run `.agents/setup` on their own, and it needs no pre-setup script: from v0.2.2 the template's setup checks that Git can read Galangan and runs `amp git-setup` when it cannot, because a fresh harness-project orb can start with a Git credential ampcode.com rejects (BIJAN-163). A harness copied from an older tag needs that step copied into its `.agents/setup`. Confirm the push with `git ls-remote origin main`, which must print your `HEAD`, and `amp projects status` from the new repo's root: it prints the project its git remote matches, and that project's URL is the repository URL for the registry.
 
 Then add the harness to the downstream registry: one row in `HARNESSES.md` at the root of the Galangan repo. If the file does not exist yet, create it with this header (BIJAN-154 owns the registry and the review routine that reads it):
 

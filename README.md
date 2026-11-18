@@ -134,7 +134,7 @@ A harness repo installs Galangan with npm as a git dependency pinned to a releas
 `allowBuilds` list before it runs the build:
 
 ```sh
-npm install --save-exact "galangan@git+https://ampcode.com/@najib/galangan.git#v0.2.1" \
+npm install --save-exact "galangan@git+https://ampcode.com/@najib/galangan.git#v0.2.2" \
   @earendil-works/pi-durable@1.5.2 @earendil-works/pi-ai@1.5.2 @earendil-works/chord@1.5.2 \
   @earendil-works/pi-schema@1.5.2 effect@4.1.4
 npm install --save-dev @types/node   # galangan/testing's types use node:test

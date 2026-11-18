@@ -78,7 +78,7 @@ export class StoreBackupFailed extends Data.TaggedError("StoreBackupFailed")<{
 }
 
 /** The versions this build stamps. Kept equal to package.json and the installed Pi by test/shell.test.ts. */
-export const WRITER = { galangan: "0.2.1", pi: "1.5.2" } as const;
+export const WRITER = { galangan: "0.2.2", pi: "1.5.2" } as const;
 
 export type ShellOptions = {
 	readonly harness: HarnessSpec;

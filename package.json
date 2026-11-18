@@ -1,6 +1,6 @@
 {
   "name": "galangan",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Galangan: a harness app shell on Pi Durable and Effect, for building custom agent harnesses",
   "license": "Apache-2.0",

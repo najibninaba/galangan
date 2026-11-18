@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Prepares a fresh Amp orb for this harness: checks Node and installs npm dependencies. Galangan comes from its git
-# repository on ampcode.com, which an orb's Amp git credentials can read.
+# Prepares a fresh Amp orb for this harness: checks Node, makes sure Git can read Galangan, and installs npm
+# dependencies. Galangan is a git dependency on ampcode.com. A fresh orb of a harness project can start with a Git
+# credential ampcode.com rejects for that repository (BIJAN-163), so setup checks it and, if it fails, runs
+# `amp git-setup`, which puts Amp's credential helper first. Credentials that already work are left alone.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -16,6 +18,23 @@ node -e '
   }
   console.log(`    node ${process.version}`);
 '
+
+step "Check Git can read Galangan"
+galangan_repo=$(node -p 'require("./package.json").dependencies.galangan.replace(/^git\+/, "").replace(/#.*$/, "")')
+can_read() { GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code "$galangan_repo" HEAD >/dev/null 2>&1; }
+if can_read; then
+  echo "    $galangan_repo"
+elif command -v amp >/dev/null 2>&1; then
+  echo "    Git cannot read $galangan_repo; running amp git-setup"
+  amp git-setup
+  if ! can_read; then
+    echo "Git still cannot read $galangan_repo after amp git-setup" >&2
+    exit 1
+  fi
+else
+  echo "Git cannot read $galangan_repo, and amp is not installed to set up Amp git credentials" >&2
+  exit 1
+fi
 
 if [[ ! -f package-lock.json ]]; then
   # A repo just made from the template: this writes the lockfile to commit.

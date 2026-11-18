@@ -17,8 +17,9 @@ Galangan repository at the pinned tag.
 
 ### Commands
 
-- `.agents/setup` installs dependencies (orbs run it): `npm install` the first time, which writes the
-  `package-lock.json` to commit, then `npm ci`. `npm run check` is tsc with no emit, and `npm test` is node --test,
+- `.agents/setup` installs dependencies (orbs run it): it first checks that Git can read the Galangan repository and
+  runs `amp git-setup` when it cannot, then `npm install` the first time, which writes the `package-lock.json` to
+  commit, then `npm ci`. `npm run check` is tsc with no emit, and `npm test` is node --test,
   which also runs Galangan's conformance cases. `npm run ci` runs both; run it before every commit. There is no CI
   workflow: the repository host has no runner with Amp git credentials to install Galangan.
 - `npm start -- --init` creates the store (only `--init` does); `npm start -- '<message>'` sends one message; `npm

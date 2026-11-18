@@ -46,12 +46,12 @@ Until the rename, the repo shares `~/.galangan/tally.sqlite` with every other un
 - Extension and section: `name: "tally"` in `defineExtension`, and the `section("tally", …)` id, become `"<name>"`.
 - Doc kind: `tally.counts` becomes `<name>.counts`. Keep `version: 1`, because this is a new kind in a new store.
 - Tool: `tally` becomes `<snake>_tally`. Update the section's prompt text that names it. In the test, `call tally {…}` becomes `call <snake>_tally {…}`, and each expected answer `tally: cups = 1` becomes `<snake>_tally: cups = 1`, because the faux model answers `<tool name>: <result>`.
-- `package.json` `name` and the AGENTS.md title become `<name>`.
+- The package name becomes `<name>` in `package.json` and in both places in `package-lock.json`, and the AGENTS.md title becomes `<name>`. The template ships them as `my-harness`: `jq '.name = "<name>"' package.json`, and `jq '.name = "<name>" | .packages[""].name = "<name>"' package-lock.json`, each written to a temporary file and moved back.
 - The file-top comments: rewrite them to say what this harness is, instead of calling it Galangan's example.
 
 Keep the counter tool as the starting tool, renamed, unless the requester described the first real tool. Conformance needs only some harness to run against, and the first real feature replaces the counter later.
 
-Then run `rg -n -i tally src package.json` and `rg --files src | rg -i tally`. The first should print only the tool's local variable `tally` and `<snake>_tally`; a leftover such as `tallyHarness`, `"tally"` or `tally.counts` means a missed rename. The second should print nothing. Doc kinds and extension names starting with `galangan.`, and tool names starting with `galangan_`, belong to the shell. Galangan does not enforce this yet, and Pi lets a later tool silently replace an earlier one with the same name.
+Then run `rg -n -i tally src package.json` and `rg --files src | rg -i tally`. The first should print only the tool's local variable `tally` and `<snake>_tally`; a leftover such as `tallyHarness`, `"tally"` or `tally.counts` means a missed rename. The second should print nothing. `rg -n my-harness package.json package-lock.json AGENTS.md` should print nothing too. Doc kinds and extension names starting with `galangan.`, and tool names starting with `galangan_`, belong to the shell. Galangan does not enforce this yet, and Pi lets a later tool silently replace an earlier one with the same name.
 
 ## 3. Write the harness half of AGENTS.md
 
@@ -84,13 +84,20 @@ Then commit everything, including `package-lock.json`: `git add -A && git commit
 
 ## 5. Publish it (approval needed)
 
-Creating the repository and pushing need the owner's explicit approval, which you asked for up front. If you do not have it yet, ask now for both at once. Once approved, run this from the new repo's root:
+Creating the repository and pushing need the owner's explicit approval, which you asked for up front. If you do not have it yet, ask now for both at once.
+
+In an orb, `amp projects create` fails: the orb's credentials cannot create projects. Create the project with the `manage_amp` tool instead, topic `projects`, operation `create`, with parameters `{ "owner": "personal", "repository_mode": "amp-hosted", "name": "<name>" }`. Use `"owner": "workspace"` for a workspace project. It returns the repository URL, such as `https://ampcode.com/@<namespace>/<name>`. `personal` means the account the thread runs as. If the owner is someone else, have them create the project, or give them the command below to run on their own machine.
+
+The new Amp-hosted repository is not empty: Amp writes its own "Initialize repository" commits, so a plain first push is rejected. Rebase onto them rather than force-pushing, run the checks again, then push. Run this from the new repo's root, with the URL `manage_amp` returned:
 
 ```sh
-amp projects create --push --personal --name <name>
+git remote add origin <repository URL>.git && git fetch --quiet origin
+git rebase origin/main && npm run ci && git push -u origin main
 ```
 
-`--personal` creates the Amp-hosted repository and project under the account running the command, not the owner's, and pushes `main`. When the owner is that account's user, this is right. Otherwise use `--workspace` for a workspace project, or give the owner this command to run from their own orb. Orbs for the project run `.agents/setup` on their own, so it needs no pre-setup script. Confirm the push with `amp projects status` from the new repo's root: it prints the project its git remote matches, and that project's URL is the repository URL for the registry.
+Outside an orb, `amp projects create --push --personal --name <name>` from the new repo's root is meant to do this in one step; it has not been tried yet.
+
+Orbs for the project run `.agents/setup` on their own, so it needs no pre-setup script. Confirm the push with `git ls-remote origin main`, which must print your `HEAD`, and `amp projects status` from the new repo's root: it prints the project its git remote matches, and that project's URL is the repository URL for the registry.
 
 Then add the harness to the downstream registry: one row in `HARNESSES.md` at the root of the Galangan repo. If the file does not exist yet, create it with this header (BIJAN-154 owns the registry and the review routine that reads it):
 

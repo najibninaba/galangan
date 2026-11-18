@@ -24,9 +24,9 @@ A harness app shell on Pi Durable and Effect. Read `README.md` first for the lay
 - Pi owns persisted execution; Effect structures services. Durable state goes in Pi documents and tasks changed in
   commits, never in module variables. Use Effect for services, layers, scoped resources and typed errors
   (`Data.TaggedError`). Do not wrap non-idempotent effects in `Effect.retry`.
-- Harnesses live outside the shell and import only `galangan` and `galangan/testing` (`examples/tally/` is the
-  reference; `test/boundary.test.ts` checks it). `galangan.*` doc kinds and extension names are the shell's. Change
-  `src/shell.ts` only for something every harness needs.
+- Harnesses use only Galangan's public package exports (`test/boundary.test.ts` checks the examples).
+- Kit extensions use Pi, not the shell. Reserve `galangan.*` doc kinds and extension names for the shell and kit.
+- Change `src/shell.ts` only for something every harness needs.
 - Pins are exact (`.npmrc` `save-exact=true`, committed `package-lock.json`) and track the latest stable releases.
   Pi packages (`pi-durable`, `pi-ai`, `chord`, `pi-schema`) move together; read Pi's `CHANGELOG.md` for every
   version crossed before a bump. Lunas is on an older Pi, so check its code against the Pi API pinned here before

@@ -86,9 +86,9 @@ configuration, including a missing store or one a newer build wrote (needs a per
 
 ## Build a harness
 
-A harness imports Galangan only through its two public entries: `galangan` (the shell, `runCli`, `defineHarness`,
-`helper`, model choice and errors) and `galangan/testing` (the faux model, `tempStore(t)` and `conformance`).
-Everything else under `src/` is internal; `exports` in `package.json` refuses deep imports.
+A harness uses Galangan's public package entries: `galangan` (the shell, `runCli`, `defineHarness`, `helper`, model
+choice and errors), `galangan/testing` (the faux model, `tempStore(t)` and `conformance`), and `galangan/kit/memory`
+(opt-in transcript tools). Everything else under `src/` is internal; `exports` in `package.json` refuses deep imports.
 [`examples/tally/`](examples/tally) is the reference harness and follows that rule (a test checks it).
 
 A new harness repo starts as a copy of [`template/`](template): this release's pins, the tsconfig, an AGENTS.md
@@ -127,10 +127,10 @@ pass the path without editing the test, keep it as `conformance(myHarness, { fro
 and run `CONFORMANCE_FROM=<backup> npm test`. When a harness finds a way to lose durability,
 the fix adds a case here, so every harness runs it on its next bump.
 
-Doc kinds and extension names starting `galangan.`, and tool names starting `galangan_`, are reserved for the shell,
-because Pi does not check collisions (a later extension's tool silently replaces an earlier one of the same name); use
-your harness's own prefix, as tally uses `tally.`. Pi, pi-ai, chord, pi-schema and Effect are exact peer dependencies,
-so a harness gets the same copies the shell runs on.
+Doc kinds and extension names starting `galangan.`, and tool names starting `galangan_`, are reserved for the shell
+and kit, because Pi does not check collisions (a later extension's tool silently replaces an earlier one of the same
+name); use your harness's own prefix, as tally uses `tally.`. Pi, pi-ai, chord, pi-schema and Effect are exact peer
+dependencies, so a harness gets the same copies the shell runs on.
 
 A harness repo installs Galangan from npm at an exact release, plus the exact peers from [Pins](#pins):
 
@@ -230,6 +230,32 @@ For offline harness tests inject a registered faux model and its supported effor
 `helper({ model: FAUX_MODEL, thinkingLevel: "off" })`. Tool arguments use closed pi-schema schemas: extra properties
 are errors, not silently removed.
 
+### Opt-in transcript memory
+
+```ts
+import { defineHarness } from "galangan";
+import { memory, memoryFormats } from "galangan/kit/memory";
+
+export const myHarness = defineHarness({
+	name: "mine",
+	extensions: [memory()],
+	formats: { ...memoryFormats },
+});
+```
+
+`memory()` adds two replay-safe tools over the current conversation's raw history. They can read text that Pi's stock
+compaction removed from active context, including inherited messages up through a fork point. They read user and
+assistant text, not thinking, images, tool results, or Pi's context markers.
+
+- `recall({ regex })` searches with a case-insensitive JavaScript regular expression and returns excerpts newest
+  first, each with its `zoom` call. `before` continues below an exclusive entry ID.
+- `zoom({ entry })` opens one entry. `zoom({ range: { from, to } })` opens both endpoints inclusively, oldest first.
+  For long results, copy the continuation footer's arguments, including any `offset`.
+
+The extension name and format key are both `galangan.memory`; spread `memoryFormats` from the first install to stamp
+format **1**. The stable tool names are `recall` and `zoom`; don't install a later extension with either name. This
+mode owns no documents or tasks and does not change compaction. It does not build a summary tree.
+
 ## Layout
 
 | Path | Role |
@@ -237,7 +263,8 @@ are errors, not silently removed.
 | `src/harness.ts` | The extension point: `HarnessSpec` and `defineHarness` |
 | `src/shell.ts` | `Shell` service and layer: opens the Harness over SQLite (`synchronous = FULL`, exclusive lock), resumes unfinished work, closes it when the scope ends; `ask` submits to the root conversation |
 | `src/models.ts` | `GALANGAN_MODEL` → model; the deterministic faux model and its script format |
-| `src/index.ts`, `src/testing.ts` | The public entries, `galangan` and `galangan/testing`; nothing else is public |
+| `src/index.ts`, `src/testing.ts` | The shell and test entries, `galangan` and `galangan/testing` |
+| `src/kit/memory/` | `galangan/kit/memory`: opt-in tools for Pi's raw history |
 | `tsconfig.build.json` | `npm run build` (run by `prepare`): `src/` to `dist/` JS and `.d.ts`, what `exports` gives other repos |
 | `src/cli.ts` | `runCli(harnesses)`: the CLI, harness selection, exit codes and signals |
 | `examples/tally/` | The reference harness: `tally.ts`, its CLI `main.ts` (`npm start`) and its test, on public entries only |

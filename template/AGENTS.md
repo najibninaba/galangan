@@ -28,11 +28,10 @@ has the upgrade steps.
 
 ### Boundaries
 
-- Import Galangan only as `galangan` and `galangan/testing`; everything else in it is internal. If the harness needs
-  something the shell does not offer, propose it to Galangan instead of patching around the shell here.
-- Doc kinds and extension names starting `galangan.`, and tool names starting `galangan_`, are the shell's. Use this
-  harness's own prefix, as tally uses `tally.`: Pi does not check collisions, so a later tool of the same name silently
-  replaces an earlier one.
+- Use only the public package exports in the pinned Galangan release.
+- Propose missing shell capabilities to Galangan instead of patching around the shell here.
+- Reserve `galangan.*` doc kinds and extension names and `galangan_` tool names for the shell and kit.
+- Use your harness's own prefix, as tally uses `tally.`: Pi lets a later tool of the same name replace an earlier one.
 - A kit extension whose docs have no migration declares its store format in `formats: { <extension>: <n> }` from its
   first release; changing or dropping it later is a format change.
 

@@ -1,5 +1,5 @@
-// The public boundary: examples import Galangan the way a harness repo must, only as "galangan" and
-// "galangan/testing". package.json `exports` already blocks "galangan/src/..."; a relative path into src/ would not be.
+// Examples use the same public entries as standalone harnesses. package.json `exports` blocks "galangan/src/...";
+// a relative path into src/ would not be.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -12,12 +12,13 @@ const SPECIFIER = /(?:\bfrom|\bimport)\s*\(?\s*["']([^"']+)["']/g;
 it("keeps examples off Galangan's internals", () => {
 	const examples = join(root, "examples");
 	const files = readdirSync(examples, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".ts"));
+	const publicExports = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).exports;
 	assert.ok(files.length > 0);
 	for (const file of files) {
 		const path = join(examples, file);
 		for (const [, specifier = ""] of readFileSync(path, "utf8").matchAll(SPECIFIER)) {
 			const outside = specifier.startsWith(".") && relative(examples, resolve(path, "..", specifier)).startsWith("..");
-			const deep = specifier.startsWith("galangan/") && specifier !== "galangan/testing";
+			const deep = specifier.startsWith("galangan/") && !Object.hasOwn(publicExports, specifier.replace("galangan", "."));
 			assert.ok(!outside && !deep, `${file} imports ${specifier}`);
 		}
 	}

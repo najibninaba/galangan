@@ -17,6 +17,10 @@
     "./testing": {
       "galangan-source": "./src/testing.ts",
       "default": "./dist/testing.js"
+    },
+    "./kit/memory": {
+      "galangan-source": "./src/kit/memory/index.ts",
+      "default": "./dist/kit/memory/index.js"
     }
   },
   "files": [

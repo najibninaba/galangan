@@ -248,7 +248,9 @@ compaction removed from active context, including inherited messages up through 
 assistant text, not thinking, images, tool results, or Pi's context markers.
 
 - `recall({ regex })` searches with a case-insensitive JavaScript regular expression and returns excerpts newest
-  first, each with its `zoom` call. `before` continues below an exclusive entry ID.
+  first, each with its `zoom` call. Each call scans at most 256 raw entries, including entries with no printable text.
+  Copy the footer's `before` to continue below that entry, even if the page had no matches. If the search times out,
+  try a simpler pattern. Matching runs off the harness thread with a one-second deadline per call.
 - `zoom({ entry })` opens one entry. `zoom({ range: { from, to } })` opens both endpoints inclusively, oldest first.
   For long results, copy the continuation footer's arguments, including any `offset`.
 

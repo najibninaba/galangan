@@ -11,7 +11,7 @@ import {
 import { Effect } from "effect";
 import { defineHarness, Shell } from "galangan";
 import { memory, memoryFormats } from "galangan/kit/memory";
-import { FAUX_MODEL, fauxAnswer, tempStore } from "galangan/testing";
+import { FAUX_MODEL, fauxAnswer, fauxModels, tempStore } from "galangan/testing";
 
 async function send(conversation: Conversation, content: string, entry?: InputEntry) {
 	const settled = await (await conversation.submit({ type: "input", content, entry }, context)).wait(context);
@@ -58,8 +58,25 @@ it("pages raw text across a fork and Pi's stock compaction without gaps or paren
 		return fauxAssistantMessage("Acknowledged.");
 	};
 	faux.setResponses([step]);
-	const harness = defineHarness({ name: "memory-test", extensions: [memory()], formats: { ...memoryFormats } });
+	const kit = memory();
+	let commits = 0;
+	let reads = 0;
+	const observedKit = { ...kit, tools: kit.tools?.map((tool) => ({
+		...tool,
+		async execute(...args: Parameters<typeof tool.execute>) {
+			const before = commits;
+			try {
+				return await tool.execute(...args);
+			} finally {
+				assert.equal(commits, before, `${tool.name} committed while reading history`);
+				reads++;
+			}
+		},
+	})) };
+	const harness = defineHarness({ name: "memory-test", extensions: [observedKit], formats: { ...memoryFormats } });
 	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
+		const observation = shell.harness.observeCommits({ advance() { commits++; }, end() {} });
+		t.after(() => observation.detach());
 		const root = await shell.harness.root(context);
 		await root.configure({ compaction: { enabled: false, keepRecentTokens: 128 } }, context);
 		const openingText = `${"a short line\n".repeat(260)}${"😀".repeat(4000)}\nBranchMark archive`;
@@ -132,8 +149,37 @@ it("pages raw text across a fork and Pi's stock compaction without gaps or paren
 		assert.match(await call(fork, "recall", { regex: "[" }, true), /Invalid regex.*recall\(\{"regex":"keyword"\}\)/s);
 		assert.match(await call(fork, "zoom", { entry: parentOnly }, true), /No messages.*recall\(\{"regex":"keyword"\}\)/s);
 		assert.match(await call(fork, "zoom", { range: { from: forkOnly, to: opening } }, true), /from <= to.*recall\(/s);
+		assert.ok(commits > 0 && reads > 0, "observe normal Pi lifecycle commits outside the tool executions");
 	})), Shell.layer({ harness, store, create: true, choice: { models, model: FAUX_MODEL } })));
 
 	using db = new DatabaseSync(store, { readOnly: true });
 	assert.equal(db.prepare("SELECT formats FROM galangan_store").get()?.formats, '{"galangan.memory":1}');
+});
+
+it("bounds recall scans with no hits and stops a catastrophic JavaScript regex", async (t) => {
+	const harness = defineHarness({ name: "recall-limits", extensions: [memory()], formats: { ...memoryFormats } });
+	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
+		const root = await shell.harness.root(context);
+		const archive = (await send(root, "prefix SPARSENEEDLE SPARSENEEDLE")).entry;
+		const passive = await root.commit(async (tx) => {
+			const ids: EntryId[] = [];
+			for (let i = 0; i < 260; i++) ids.push((await tx.appendEntry(root.id, { kind: "fixture.passive" })).id);
+			return ids;
+		}, context);
+		const regex = "^prefix (?<=prefix )(sparseneedle) \\1$";
+		const first = part(await call(root, "recall", { regex, before: passive.at(-1)! + 1 }), "recall");
+		assert.match(first.body, /^No matches on this page\.$/);
+		assert.deepEqual(first.next, { regex, before: passive[4] });
+		const next = part(await call(root, "recall", first.next!), "recall");
+		assert.match(next.body, new RegExp(`^zoom\\(\\{"entry":${archive}\\}\\) \\| user \\|`));
+		assert.equal(next.next, undefined);
+
+		// A near miss on this short input takes seconds in V8, but still finishes if isolation regresses.
+		await send(root, `${"a".repeat(29)}!`);
+		const started = performance.now();
+		const output = await call(root, "recall", { regex: "^(a+)+$" }, true);
+		assert.match(output, /Regex match timed out\. Try a simpler regex\./);
+		const elapsed = performance.now() - started;
+		assert.ok(elapsed < 3_000, `catastrophic recall took ${Math.round(elapsed)}ms`);
+	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
 });

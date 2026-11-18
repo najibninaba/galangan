@@ -45,6 +45,15 @@ has the upgrade steps.
 - Mark a tool `replay: "safe"` only when running it twice is harmless; otherwise a crash mid-call gives the model an
   `interrupted` result, which is the safe default.
 
+### Secrets
+
+- Name every environment variable a tool needs, such as an API token, in `defineHarness({ secrets: [...] })`, and
+  read it from `process.env` in the tool. The CLI then exits 78 at startup when one is unset, and the shell replaces
+  its value with `[secret NAME]` in every tool result and error before Pi stores it.
+- Redaction matches exact values: never put a secret in tool arguments or an encoded form such as
+  base64. Keep values in the environment, never in code, docs or the store.
+- Amp project secrets reach only orbs of that project: run the harness live from a thread in its own project.
+
 ### Tests
 
 - Tests use the faux model and real file-backed SQLite from `galangan/testing` (`fauxModels`, `FAUX_MODEL`,

@@ -6,13 +6,14 @@
 // probe extension (`galangan.conformance`) to the harness's own extensions, so the cases run through the harness's
 // hooks, sections and formats as deployed, but need no prompt that makes the harness's own tools do something. When a
 // harness finds a way to lose durability, the fix lands here as a case, and every harness runs it on its next bump.
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
 import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
-import { defineDoc, defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
+import { LiveDoc, defineDoc, defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
 import { Effect } from "effect";
 import type { HarnessSpec } from "./harness.ts";
@@ -51,8 +52,10 @@ const Probes = defineDoc<{ counts: Record<string, number> }>({
 /**
  * Registers node:test cases (in a `describe` named after the harness) that check the shell's durability promise for
  * `spec`: committed state survives a close and reopen, every commit is written with `synchronous = FULL`, a repeated
- * request ID is one input even after a reopen, and a non-replay-safe tool cut off mid-call returns `interrupted` and
- * is not run again. Call it once at the top level of a test file: `conformance(myHarness)`.
+ * request ID is one input even after a reopen, a non-replay-safe tool cut off mid-call returns `interrupted` and
+ * is not run again, and no secret's value reaches the store from a tool's result or error. The cases set the
+ * harness's `secrets` to made-up values, so they need none of the real ones. Call it once at the top level of a test
+ * file: `conformance(myHarness)`.
  */
 export function conformance(spec: HarnessSpec, options: ConformanceOptions = {}): void {
 	// Test coordination only, not durable state: the hang tool tells its case it is running.
@@ -89,7 +92,35 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 			}),
 		],
 	});
-	const harness: HarnessSpec = { ...spec, extensions: [...spec.extensions, probe] };
+	// Made-up values for the harness's own secrets and one of the suite's, so the leak case runs for every harness.
+	const secrets = [...(spec.secrets ?? []), "GALANGAN_CONFORMANCE_SECRET"];
+	const env = Object.fromEntries(secrets.map((name) => [name, `s${randomUUID().replaceAll("-", "")}`]));
+	let progressReady: (() => void) | undefined;
+	const leaky = defineExtension({
+		name: "galangan.conformance.secrets",
+		tools: [defineTool({
+			name: "galangan_probe_secret",
+			description: "Conformance probe: put every secret's value in the result, or in a thrown error when `how` " +
+				"is \"throw\", as a careless tool might.",
+			parameters: obj({ how: str() }),
+			execute: async (args, api, context) => {
+				const values = Object.values(env).join(" ");
+				api.output(values.slice(0, 8));
+				api.output(values.slice(8));
+				api.diagnostic({ severity: "info", code: values, message: values });
+				await api.details({ sent: values }, context);
+				if (args.how === "interrupt") {
+					await api.commit((tx) => tx.doc(LiveDoc, api.conversationId).then(() => undefined), context);
+					progressReady?.();
+					await new Promise((_, reject) => context.abortSignal?.addEventListener("abort",
+						() => reject(new Error("interrupted")), { once: true }));
+				}
+				if (args.how === "throw") throw new Error(`request with ${values} failed`);
+				return { output: [{ type: "text", text: `sent ${values}` }], details: { sent: values } };
+			},
+		})],
+	});
+	const harness: HarnessSpec = { ...spec, secrets, extensions: [...spec.extensions, probe, leaky] };
 
 	/** This case's store: a copy of `options.from`, or a path for a new one. */
 	const store = (t: TestContext) => {
@@ -107,6 +138,7 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 			choice: { models: fauxModels(), model: FAUX_MODEL },
 			store: path,
 			create: !existsSync(path),
+			env,
 		})));
 	const ask = (path: string, ...messages: (readonly [string, string?])[]) =>
 		withShell(path, Effect.gen(function* () {
@@ -150,6 +182,42 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 				[call("r"), "conformance:2"]), [once, once, "galangan_probe: r = 2"]);
 			const reopened = await ask(path, [call("r"), "conformance:1"], [call("r")]);
 			assert.deepEqual(reopened, [once, "galangan_probe: r = 3"]);
+		});
+
+		it("redacts SQLite live progress before settlement and after interrupted reopen", { timeout: 60_000 }, async (t) => {
+			const path = store(t);
+			const ready = new Promise<void>((resolve) => { progressReady = resolve; });
+			const inspect = () => {
+				for (const file of [path, `${path}-wal`].filter((file) => existsSync(file))) {
+					const bytes = readFileSync(file).toString("latin1");
+					for (const value of Object.values(env)) assert.equal(bytes.includes(value), false);
+				}
+			};
+			await withShell(path, Effect.gen(function* () {
+				yield* Effect.forkChild((yield* Shell).ask('call galangan_probe_secret {"how":"interrupt"}',
+					{ requestId: "secret-interrupt" }));
+				yield* Effect.promise(() => ready);
+				inspect();
+			}));
+			inspect();
+			await ask(path, ['call galangan_probe_secret {"how":"interrupt"}', "secret-interrupt"]);
+			inspect();
+		});
+
+		it("keeps secret values out of the store, also when a tool's error quotes them", async (t) => {
+			const path = store(t);
+			const marks = secrets.map((name) => `[secret ${name}]`).join(" ");
+			const [sent, threw = ""] = await ask(path, ['call galangan_probe_secret {"how":"return"}'],
+				['call galangan_probe_secret {"how":"throw"}']);
+			// The model still learns which secret was involved.
+			assert.ok(sent?.startsWith(`galangan_probe_secret: sent ${marks}`));
+			assert.match(threw, /^galangan_probe_secret failed: /);
+			assert.ok(threw.includes(`with ${marks} failed`), threw);
+			// The file itself, not what Pi reads back: a value anywhere in it, a page or the WAL, is a leak.
+			const bytes = [path, `${path}-wal`].filter((file) => existsSync(file)).map((file) => readFileSync(file).toString("latin1"));
+			for (const [name, value] of Object.entries(env)) {
+				assert.ok(bytes.every((content) => !content.includes(value)), `${name}'s value is in the store`);
+			}
 		});
 
 		// A hang here means the probe call never started or the close never cut it off.

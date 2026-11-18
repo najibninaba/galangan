@@ -16,6 +16,12 @@ export type HarnessSpec = {
 	 * instead of reading as empty. Declare it from the extension's first release: adding it later is a format change.
 	 */
 	readonly formats?: { readonly [extension: string]: number };
+	/**
+	 * Environment variables the harness's tools need, such as an API token; tools still read them from the
+	 * environment. `runCli` exits 78 at startup when one is unset or empty, and the shell replaces each value with
+	 * `[secret NAME]` in every tool result before Pi stores it (src/secrets.ts).
+	 */
+	readonly secrets?: readonly string[];
 };
 
 /** Types a harness definition; pass harnesses to `runCli` (see examples/tally). */

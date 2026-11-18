@@ -5,7 +5,7 @@
 //
 // Environment: GALANGAN_HARNESS (a name among `harnesses`; default the first), GALANGAN_MODEL (see src/models.ts;
 // default the faux model), GALANGAN_THINKING (a supported thinking level; see src/models.ts), GALANGAN_DATA (store
-// directory; default ~/.galangan from any directory).
+// directory; default ~/.galangan from any directory), and every variable the harness names in `secrets`.
 // Exit codes: 0 done, 1 failed (restart it), 75 store in use by another process, 78 bad configuration or a store this
 // build must not open (needs a person),
 // 130/143 stopped by SIGINT/SIGTERM after closing the Harness.
@@ -16,6 +16,7 @@ import { createInterface } from "node:readline/promises";
 import { Effect } from "effect";
 import type { HarnessSpec } from "./harness.ts";
 import { chooseModel, InvalidModel } from "./models.ts";
+import { missingSecrets } from "./secrets.ts";
 import { Shell, StoreBackupFailed, StoreIncompatible, StoreLocked, StoreMissing } from "./shell.ts";
 
 const EXIT_LOCKED = 75;
@@ -40,6 +41,12 @@ export function runCli(harnesses: readonly HarnessSpec[]): Promise<void> {
 	const harness = harnesses.find((candidate) => candidate.name === name);
 	if (harness === undefined) {
 		console.error(`galangan: unknown harness ${name}; this build has ${harnesses.map((h) => h.name).join(", ")}`);
+		process.exit(EXIT_CONFIG);
+	}
+	// Before anything opens: a tool that finds its token missing would fail only when the model calls it.
+	const missing = missingSecrets(harness, process.env);
+	if (missing.length > 0) {
+		console.error(`galangan: ${harness.name} needs ${missing.join(", ")} set in the environment`);
 		process.exit(EXIT_CONFIG);
 	}
 	const init = process.argv[2] === "--init";

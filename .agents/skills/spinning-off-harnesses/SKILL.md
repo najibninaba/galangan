@@ -62,6 +62,7 @@ Write in the harness half only facts an agent in this repo cannot infer from its
 - What the harness is for, in the requester's words.
 - Its names: the harness `<name>`, the prefix `<name>.` for doc kinds and extensions, the prefix `<snake>_` for tools, and the store `~/.galangan/<name>.sqlite`.
 - Its tools and doc kinds now: `<snake>_tally` and `<name>.counts`, marked as the starting counter that the first real tool replaces.
+- Secrets: each environment variable the harness's tools will need, such as an API token, listed in `secrets` in `defineHarness`, and which Amp project holds it. Tally needs none; add them with the first real tool.
 - Upstream: Galangan at `<tag>` (`https://github.com/najibninaba/galangan`, npm `galangan`). Fold-backs to Galangan go in Linear, team Bijandev, project Galangan, as described in "Fold-backs" below; write that procedure into this half, because this skill is not loaded in the harness repo. Name the owner.
 
 ## 4. Install and verify

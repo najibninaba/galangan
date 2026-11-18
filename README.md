@@ -118,7 +118,9 @@ and adds the harness to `HARNESSES.md`.
 `conformance(spec)` from `galangan/testing` registers the shell's durability promise as node:test cases over real
 SQLite and the faux model, run through your harness's own extensions plus a probe extension: committed tool state
 survives a close and reopen, every commit is written with `synchronous = FULL`, a repeated request ID is one input
-even after a reopen, and a tool that is not replay-safe, cut off mid-call, returns `interrupted` and is not run again.
+even after a reopen, a tool that is not replay-safe, cut off mid-call, returns `interrupted` and is not run again,
+and no secret's value reaches the store file from a tool's result or thrown error (the cases set made-up values for
+the harness's `secrets`, so they need none of the real ones).
 Before an upgrade, run it on the backup of production's store, taken with the process stopped: each case copies that
 file (and its WAL) and never opens the original, and one more case checks that the copy starts from its history. To
 pass the path without editing the test, keep it as `conformance(myHarness, { from: process.env.CONFORMANCE_FROM })`
@@ -162,6 +164,22 @@ records a format for every extension, 0 for one that declares none, and a store 
 open with the wipe step, rather than reading the old docs as empty. Declare a format from the extension's first
 release: declaring one later, or dropping it, is a format change. An extension the store has no record of may start
 at any format.
+
+A tool that calls an outside service names the environment variables it needs in `secrets`, and keeps reading them
+from `process.env` itself:
+
+```ts
+export const myHarness = defineHarness({ name: "mine", secrets: ["TODOIST_API_TOKEN"], extensions: [...] });
+```
+
+`runCli` then exits 78 at startup, naming the variable, when one is unset or empty, instead of starting a session whose
+tool fails only when the model calls it. And the shell's `galangan.secrets` extension, installed last for every
+harness, replaces each value with `[secret NAME]` in every tool result before Pi commits it: the output, structured
+output, details and diagnostics, so also a thrown error's message, in the root conversation and in `helper()`'s child.
+It matches exact values only. Encoded values (base64, URL escapes) and model-authored tool arguments remain outside
+this policy. Live tool output, details and diagnostics are redacted before Pi receives them. Amp project
+secrets reach only orbs of that project, so run a harness that needs one from a thread in its own project.
+`Shell.layer({ ..., env })` reads the values from `env` instead of `process.env`, as tests do.
 
 Keep state that must survive a restart in Pi documents (`defineDoc`) changed inside `api.commit`, as `tally` does, not
 in module variables. Mark a tool `replay: "safe"` only when running it twice is harmless; otherwise a crash mid-call
@@ -219,10 +237,11 @@ are errors, not silently removed.
 | `examples/tally/` | The reference harness: `tally.ts`, its CLI `main.ts` (`npm start`) and its test, on public entries only |
 | `template/` | The starter a new harness repo copies: pins, tsconfig, AGENTS.md, `.agents/setup` and tally in `src/` |
 | `src/helper.ts` | Opt-in bounded foreground helper (Sol high by default) |
+| `src/secrets.ts` | `HarnessSpec.secrets`: the startup check and the `galangan.secrets` redaction hook |
 | `test/shell.test.ts` | The shell over a real SQLite file: missing and locked stores, model changes, the stamp and backups, model choice |
 | `test/conformance.test.ts` | `conformance` on a copy of an existing store, which it leaves untouched (tally's own test runs it on new stores) |
 | `test/store.test.ts` | The CLI as processes: one default store from any directory, `--init` (once), the old `./data` hint, a second process refused, a newer store refused |
-| `test/main.test.ts` | The CLI as a child process: an unanswered line does not end the session; SIGINT/SIGTERM close the Harness |
+| `test/main.test.ts` | The CLI as a child process: an unanswered line does not end the session; SIGINT/SIGTERM close the Harness; a missing secret exits 78 |
 | `test/helper.test.ts` | Faux-only helper findings, limits, no recursion and restart recovery |
 | `test/boundary.test.ts` | Examples import only the public entries |
 | `test/template.test.ts` | `template/` carries examples/tally unchanged and this release's tag, pins and compiler options |

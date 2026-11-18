@@ -23,11 +23,12 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { SqliteDatabase } from "@earendil-works/chord/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { AssistantEntry, createRegistry, Harness, type ModelRef } from "@earendil-works/pi-durable";
+import { AgentDoc, AssistantEntry, createRegistry, Harness, type ModelRef } from "@earendil-works/pi-durable";
 import { CURRENT_SQLITE_SCHEMA_VERSION, SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { Context, Data, Effect, Layer, Predicate, Schedule } from "effect";
 import type { HarnessSpec } from "./harness.ts";
 import { chooseThinking, type ModelChoice } from "./models.ts";
+import { redactor, secretsExtension, type Env } from "./secrets.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -87,6 +88,8 @@ export type ShellOptions = {
 	readonly store: string;
 	/** Create `store` and its directory when missing; otherwise a missing store is `StoreMissing`. */
 	readonly create?: boolean;
+	/** Where the harness's secrets are read from, to redact their values from tool results. Default: process.env. */
+	readonly env?: Env;
 };
 
 export class Shell extends Context.Service<Shell, {
@@ -98,7 +101,7 @@ export class Shell extends Context.Service<Shell, {
 	/** Submit `content` to the root conversation and wait for its answer text. A repeated `requestId` is one input. */
 	readonly ask: (content: string, options?: { readonly requestId?: string }) => Effect.Effect<string, Unanswered>;
 }>()("galangan/Shell") {
-	static layer = ({ harness: spec, choice, store, create = false }: ShellOptions) =>
+	static layer = ({ harness: spec, choice, store, create = false, env = process.env }: ShellOptions) =>
 		Layer.effect(Shell, Effect.gen(function* () {
 			// A directory or other non-file would only fail later as SQLITE_CANTOPEN, a defect that says "restart it".
 			const found = statSync(store, { throwIfNoEntry: false });
@@ -123,7 +126,7 @@ export class Shell extends Context.Service<Shell, {
 						times: 3,
 					}),
 					Effect.flatMap((db) =>
-						Effect.tryPromise({ try: () => open(spec, choice, store, db), catch: (error) => error })),
+						Effect.tryPromise({ try: () => open(spec, choice, store, db, env), catch: (error) => error })),
 					// The stamp check and the backup fail typed; anything else is a defect.
 					Effect.catch((error): Effect.Effect<never, StoreLocked | StoreIncompatible | StoreBackupFailed> =>
 						error instanceof StoreLocked || error instanceof StoreIncompatible
@@ -137,6 +140,20 @@ export class Shell extends Context.Service<Shell, {
 			const root = yield* Effect.promise(() => harness.root(context));
 			// root({ agent }) only configures a new conversation. Reconfigure before resuming existing work too.
 			yield* Effect.promise(() => root.configure({ model: choice.model, thinkingLevel }, context));
+			// Repair explicit selections before any persisted child task can resume.
+			yield* Effect.promise(() => harness.commit(async (tx) => {
+				let cursor;
+				do {
+					const page = await tx.scanConversations({}, 100, cursor);
+					for (const conversation of page.items) {
+						const agent = await tx.doc(AgentDoc, conversation.id);
+						if (Array.isArray(agent.extensions)) {
+							agent.extensions = [...agent.extensions.filter((name) => name !== "galangan.secrets"), "galangan.secrets"];
+						}
+					}
+					cursor = page.next;
+				} while (cursor !== undefined);
+			}, context));
 			harness.resume();
 			const ask = (content: string, options: { readonly requestId?: string } = {}) =>
 				Effect.gen(function* () {
@@ -178,9 +195,21 @@ async function lock(store: string): Promise<SqliteDatabase> {
 }
 
 /** Checks, backs up, migrates and stamps the locked store `db`, then opens the Pi Harness over it. */
-async function open(spec: HarnessSpec, choice: ModelChoice, store: string, db: SqliteDatabase): Promise<Harness> {
+async function open(
+	spec: HarnessSpec,
+	choice: ModelChoice,
+	store: string,
+	db: SqliteDatabase,
+	env: Env,
+): Promise<Harness> {
+	const redact = redactor(spec, env);
+	// Last, so its afterTool hook sees what the harness's own hooks made of a result. Not in the stamp's formats: it
+	// stores nothing. Conversations that never chose their extensions follow `settings.extensions`, so it also reaches
+	// a store's existing root conversation.
+	const extensions = [...spec.extensions, secretsExtension(redact, spec.extensions.flatMap((extension) => extension.tools ?? []),
+		(spec.secrets ?? []).map((name) => env[name] ?? "").filter((value) => value !== ""))];
 	const registry = createRegistry();
-	for (const extension of spec.extensions) registry.install(extension);
+	for (const extension of extensions) registry.install(extension);
 	let formats: Formats;
 	try {
 		formats = await checkStamp(db, spec, store);
@@ -208,8 +237,8 @@ async function open(spec: HarnessSpec, choice: ModelChoice, store: string, db: S
 	const harness = await Harness.open(storage, {
 		models: choice.models,
 		registry,
-		settings: { extensions: spec.extensions, afterFailedRun: "withdraw" },
-		onReport: (report) => console.error(`[galangan:${spec.name}] ${report.kind}: ${String(report.error)}`),
+		settings: { extensions, afterFailedRun: "withdraw" },
+		onReport: (report) => console.error(`[galangan:${spec.name}] ${report.kind}: ${redact(String(report.error))}`),
 	}, context);
 	connections.set(harness, db);
 	return harness;

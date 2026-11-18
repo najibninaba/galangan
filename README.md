@@ -103,6 +103,10 @@ mkdir my-harness && cp -r /tmp/galangan/template/. my-harness/
 cd my-harness && git init && ./.agents/setup && npm run ci
 ```
 
+In an Amp thread on this repository, the `spinning-off-harnesses` skill (`.agents/skills/`) does all of this. It also
+renames tally, writes the harness half of AGENTS.md, checks the CLI, and, with your approval, creates the Amp project
+and adds the harness to `HARNESSES.md`.
+
 1. Start from tally in the template's `src/` (or copy [`examples/tally/`](examples/tally): `tally.ts`, `main.ts` and
    `tally.test.ts`), and rename it to your harness.
 2. Put your tools, sections, hooks and tasks in its extensions, and give it a name with `defineHarness`.

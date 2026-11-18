@@ -3,6 +3,17 @@
 Each release says whether it migrates the store and gives a `Migration:` line for every change harness code must
 make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for release lines and how to upgrade.
 
+## Unreleased
+
+### Added
+
+- Spin-off skill (BIJAN-153): `.agents/skills/spinning-off-harnesses` makes a harness repo from `template/` at the
+  latest release tag. It renames tally (store, doc kinds, extension and tool), writes the harness half of AGENTS.md,
+  runs `npm run ci` and the CLI, and, with the owner's approval, creates the Amp project and adds the harness to
+  `HARNESSES.md`. It also says how a harness files fold-backs to Galangan. Nothing in the package changes.
+
+Migration: none.
+
 ## 0.2.1 - 2026-11-17
 
 The starter template for new harness repos: copy `template/` at this tag (see the README). Still on Pi Durable 1.5.2

@@ -18,7 +18,7 @@ node -e '
 '
 
 if [[ ! -f package-lock.json ]]; then
-  # A repo just made from the template: this writes the lockfile to commit.
+  # The template ships a lockfile; this only runs if it was deleted, and writes a new one to commit.
   step "npm install (no package-lock.json yet)"
   timed npm install --no-audit --no-fund
 elif [[ -d node_modules ]]; then

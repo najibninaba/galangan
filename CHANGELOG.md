@@ -3,6 +3,25 @@
 Each release says whether it migrates the store and gives a `Migration:` line for every change harness code must
 make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for release lines and how to upgrade.
 
+## 0.2.4 - 2026-11-18
+
+The template ships its `package-lock.json`. Still on Pi Durable 1.5.2 and Effect 4.1.4, and no change to the shell's
+API.
+
+Store: no Pi migration; Pi stays at 1.5.2 (schema 2). The first open by 0.2.4 of a store 0.2.3 stamped copies it to
+`<store>.<UTC time>.bak` and restamps it; 0.2.3 then refuses that store (exit 78), so roll back by restoring the
+backup.
+
+Upgrading from 0.2.3: run `npm install --save-exact galangan@0.2.4`. Nothing else in harness code changes.
+
+### Fixed
+
+- A new harness's first `npm install` wrote a lockfile that `npm ci` then rejected (`lock file's ws@8.23.0 does not
+  satisfy ws@8.21.0`; chord pins `ws` exactly). `template/package-lock.json` is now committed, generated and checked
+  with `npm ci`, so a new harness starts from a lockfile that installs.
+
+Migration: none.
+
 ## 0.2.3 - 2026-11-18
 
 Galangan is public: the repository is https://github.com/najibninaba/galangan and the package is `galangan` on npm.

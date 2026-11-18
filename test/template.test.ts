@@ -29,6 +29,12 @@ it("pins the template to this release's tag and exact peers", () => {
 		assert.equal(version, own.devDependencies[name], name);
 	}
 	assert.equal(template.engines.node, own.engines.node);
+	// The shipped lockfile is what a new harness installs with `npm ci`; it must ask for the same packages.
+	const lock = json("template/package-lock.json");
+	assert.deepEqual(lock.packages[""].dependencies, template.dependencies);
+	assert.deepEqual(lock.packages[""].devDependencies, template.devDependencies);
+	assert.equal(lock.packages["node_modules/galangan"].resolved,
+		`https://registry.npmjs.org/galangan/-/galangan-${own.version}.tgz`);
 });
 
 it("type-checks the template with Galangan's compiler options", () => {

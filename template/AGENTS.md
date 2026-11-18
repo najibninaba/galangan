@@ -17,8 +17,8 @@ has the upgrade steps.
 
 ### Commands
 
-- `.agents/setup` installs dependencies (orbs run it): `npm install` the first time, which writes the
-  `package-lock.json` to commit, then `npm ci`. `npm run check` is tsc with no emit, and `npm test` is node --test,
+- `.agents/setup` installs dependencies (orbs run it) with `npm ci` from the committed `package-lock.json`, which the
+  template ships. `npm run check` is tsc with no emit, and `npm test` is node --test,
   which also runs Galangan's conformance cases. `npm run ci` runs both; run it before every commit.
 - `npm start -- --init` creates the store (only `--init` does); `npm start -- '<message>'` sends one message; `npm
   start` reads one message per stdin line. `GALANGAN_MODEL=real` uses a real model and needs `OPENAI_API_KEY`.

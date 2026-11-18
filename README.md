@@ -95,7 +95,8 @@ A new harness repo starts as a copy of [`template/`](template): this release's p
 with these conventions, `.agents/setup`, `npm run ci` (check, then test with conformance) and tally as its starting
 harness in `src/`. Copy it from the release tag it pins, not from `main`: between releases `main` can carry peers or
 shell API that the last tag lacks. Copy `template/.`, not `template/*`, so the dotfiles (`.npmrc`, `.gitignore`,
-`.agents/`) come too. Then run `.agents/setup` and commit the `package-lock.json` its first install writes:
+`.agents/`) come too. The template ships its `package-lock.json`, so `.agents/setup` runs `npm ci`; commit the lockfile
+with the rest:
 
 ```sh
 git clone --quiet --depth 1 --branch v<version> https://github.com/najibninaba/galangan.git /tmp/galangan
@@ -132,7 +133,7 @@ so a harness gets the same copies the shell runs on.
 A harness repo installs Galangan from npm at an exact release, plus the exact peers from [Pins](#pins):
 
 ```sh
-npm install --save-exact galangan@0.2.3 \
+npm install --save-exact galangan@0.2.4 \
   @earendil-works/pi-durable@1.5.2 @earendil-works/pi-ai@1.5.2 @earendil-works/chord@1.5.2 \
   @earendil-works/pi-schema@1.5.2 effect@4.1.4
 npm install --save-dev @types/node   # galangan/testing's types use node:test

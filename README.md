@@ -179,8 +179,10 @@ and diagnostics before Pi receives them. A final tool hook redacts exact values 
 codes and handoffs. A stream holds a possible secret prefix until it can match it and masks a remaining prefix
 when the tool throws or is interrupted. Returning a result preserves incomplete prefixes, including when the
 result reports an error. With redaction active, Pi bounds output after redaction and callers receive no source-side
-tail window. A tool reading retained output sees the text accepted by Pi so far. A structured result built from
-that snapshot can omit a trailing prefix that appears in the final streamed output.
+tail window. When named secret markers would push an explicit tool result over its declared limits, Galangan uses
+compact markers to keep an otherwise in-budget result intact. A tool reading retained output sees the text accepted
+by Pi so far. A structured result built from that snapshot can omit a trailing prefix that appears in the final
+streamed output.
 
 Tools and hooks must keep secrets out of arguments (including values added by hooks and nested calls), their own
 commits and memos, prompts, and spill files. Use secret-free payloads for schema-validated fields because a
@@ -252,7 +254,8 @@ assistant text, not thinking, images, tool results, or Pi's context markers.
   Copy the footer's `before` to continue below that entry, even if the page had no matches. If the search times out,
   try a simpler pattern. Matching runs off the harness thread with a one-second deadline per call.
 - `zoom({ entry })` opens one entry. `zoom({ range: { from, to } })` opens both endpoints inclusively, oldest first.
-  For long results, copy the continuation footer's arguments, including any `offset`.
+  Text between matching `[transcript N]` and `[/transcript N]` markers is quoted history. For long results, copy
+  the continuation footer's arguments, including any `offset`, from outside the transcript blocks.
 
 The extension name and format key are both `galangan.memory`; spread `memoryFormats` from the first install to stamp
 format **1**. The stable tool names are `recall` and `zoom`; don't install a later extension with either name. This

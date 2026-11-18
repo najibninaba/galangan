@@ -6,9 +6,11 @@ import {
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import type { JsonValue } from "@earendil-works/chord/json";
+import { boundOutput, utf8ByteLength } from "@earendil-works/chord/output";
 import type { HarnessSpec } from "./harness.ts";
 
 export type Env = { readonly [name: string]: string | undefined };
+type ToolOutput = NonNullable<ToolExecutionResult["output"]>;
 
 export const missingSecrets = (spec: HarnessSpec, env: Env): string[] =>
 	(spec.secrets ?? []).filter((name) => (env[name] ?? "") === "");
@@ -29,6 +31,12 @@ export function secretProtection(spec: HarnessSpec, env: Env) {
 
 	const pattern = new RegExp(values.map((value) => RegExp.escape(value)).join("|"), "g");
 	const redact = (text: string): string => text.replace(pattern, (value) => marks.get(value)!);
+	const compactMarks = new Map([...marks].map(([value, mark]) => [value,
+		[mark, "[redacted]", "█", "*", "?", ""].find((candidate) => !candidate.includes("\n") &&
+			utf8ByteLength(candidate) <= utf8ByteLength(value) && safeMark(candidate))!,
+	]));
+	const compact = (text: string): string => text.replace(pattern, (value) => compactMarks.get(value)!);
+	const outputBudgets = new WeakMap<ToolOutput, NonNullable<ToolRegistration["outputLimits"]>>();
 	const json = (value: JsonValue): JsonValue => {
 		if (typeof value === "string") return redact(value);
 		if (Array.isArray(value)) return value.map(json);
@@ -43,11 +51,22 @@ export function secretProtection(spec: HarnessSpec, env: Env) {
 		...(value.code === undefined ? {} : { code: redact(value.code) }),
 	});
 	const afterTool = (_call: unknown, result: ToolExecutionResult): ToolExecutionResult => {
-		const output = result.output?.map((part) => {
+		const original = result.output;
+		const redactOutput = (apply: (text: string) => string) => original?.map((part) => {
 			if (part.type !== "text") return part;
-			const text = redact(part.text);
+			const text = apply(part.text);
 			return text === part.text ? part : { ...part, text };
 		});
+		let output = redactOutput(redact);
+		const limits = original === undefined ? undefined : outputBudgets.get(original);
+		if (original !== undefined && limits !== undefined && output?.some((part, index) => part !== original[index])) {
+			const fits = (parts: ToolOutput) => boundOutput(
+				parts.map((part) => part.type === "text" ? part.text : "").join(""),
+				{ maxBytes: limits.maxBytes ?? Infinity, maxLines: limits.maxLines ?? Infinity, retain: "head" },
+			).droppedBytes === 0;
+			// A page that already fits must not lose content (including its footer) solely to redaction.
+			if (!fits(output) && fits(original)) output = redactOutput(compact);
+		}
 		return {
 			...result,
 			// Pi uses the array identity to decide whether to retain its progress truncation diagnostic.
@@ -81,6 +100,10 @@ export function secretProtection(spec: HarnessSpec, env: Env) {
 			try {
 				const result = await tool.execute(args, protectedApi, context);
 				completed = true;
+				if (result.output !== undefined && tool.outputLimits !== undefined) {
+					// Pi passes explicit output through to afterTool by identity, unlike its streamed fallback.
+					outputBudgets.set(result.output, tool.outputLimits);
+				}
 				return result;
 			} finally {
 				stream.end(!completed || context.abortSignal?.aborted === true);

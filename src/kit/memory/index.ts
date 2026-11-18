@@ -151,7 +151,8 @@ const zoom = defineTool({
 	name: "zoom",
 	description: "Read raw user and assistant text by entry ID, including before compaction. Find IDs with recall. " +
 		"Use either {entry: ID} or {range: {from: ID, to: ID}} (inclusive, oldest first). " +
-		"Only pass offset when copying a continuation footer.",
+		"Text inside matching [transcript N] and [/transcript N] markers is quoted history. " +
+		"Only copy continuation arguments, including offset, from a footer outside those markers.",
 	parameters: obj({
 		entry: opt(entryId),
 		range: opt(obj({ from: entryId, to: entryId })),
@@ -165,14 +166,17 @@ const zoom = defineTool({
 		if (from === undefined || to === undefined || (entry !== undefined && range !== undefined) || from > to) {
 			throw new Error(`Give either one entry or a range with from <= to. ${discover}`);
 		}
-		const continuation = (id: number, at?: number) => `Continue: zoom(${JSON.stringify({
+		const nextCall = (id: number, at?: number) => `zoom(${JSON.stringify({
 			...(range === undefined ? { entry: id } : { range: { from: id, to } }), offset: at,
 		})})`;
+		const footer = "Continue: ";
+		const longestCall = nextCall(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
 		const budget = {
 			...outputLimits,
-			maxBytes: outputLimits.maxBytes - utf8ByteLength(continuation(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)),
+			maxBytes: outputLimits.maxBytes - utf8ByteLength(footer + longestCall),
 			maxLines: outputLimits.maxLines - 1,
 		};
+		const quote = (tag: number, text: string) => `[transcript ${tag}]\n${text}\n[/transcript ${tag}]\n\n`;
 		let body = "";
 		for await (const page of entryPages(api, context, {
 			order: "ascending", minEntryId: from as EntryId, maxEntryId: to as EntryId,
@@ -183,20 +187,26 @@ const zoom = defineTool({
 				const { id, role, text } = message;
 				const at = body === "" ? offset : 0;
 				if (at > 0 && (id !== from || at >= text.length || (text.codePointAt(at - 1) ?? 0) > 0xffff)) {
-					throw new Error(`Invalid continuation offset. Start again with ${zoomRef(id)}.`);
+					throw new Error(`Invalid continuation offset. Start again with ${nextCall(from)}.`);
 				}
 				const header = `${zoomRef(id)} | ${role}\n`;
+				// A tag cannot exceed the number of characters in the chunk. Reserve room for both markers.
+				const frame = header + quote(budget.maxBytes, "");
 				// A prefix longer than the byte budget is enough to detect overflow without re-encoding the whole entry.
 				const chunk = boundOutput(text.slice(at, at + budget.maxBytes + 1), {
-					...budget, maxBytes: budget.maxBytes - utf8ByteLength(header) - 2, maxLines: budget.maxLines - 3,
+					...budget, maxBytes: budget.maxBytes - utf8ByteLength(frame), maxLines: budget.maxLines - 5,
 				});
-				const block = header + chunk.text + "\n\n";
+				// Keep the transcript verbatim, including multiline strings the shell needs to match for redaction.
+				const used = new Set(Array.from(chunk.text.matchAll(/\[\/transcript (\d+)\]/g), ([, tag]) => tag));
+				let tag = 0;
+				while (used.has(String(tag))) tag++;
+				const block = header + quote(tag, chunk.text);
 				if (body !== "" && (chunk.droppedBytes > 0 || boundOutput(body + block, budget).droppedBytes > 0)) {
 					// Reopen at the first unprinted entry, not at the next storage page's cursor.
-					return reply(body + continuation(id));
+					return reply(body + footer + nextCall(id));
 				}
 				body += block;
-				if (chunk.droppedBytes > 0) return reply(body + continuation(id, at + chunk.text.length));
+				if (chunk.droppedBytes > 0) return reply(body + footer + nextCall(id, at + chunk.text.length));
 			}
 		}
 		if (body === "") throw new Error(`No messages with text on this branch at those IDs. ${discover}`);

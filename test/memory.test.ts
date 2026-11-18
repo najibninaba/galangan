@@ -37,6 +37,14 @@ function part(output: string, tool: "recall" | "zoom"): { body: string; next?: o
 	};
 }
 
+function zoomBlocks(body: string): { entry: EntryId; role: string; text: string }[] {
+	const blocks = [...body.matchAll(
+		/^zoom\((\{.*?\})\) \| ([^\n]+)\n\[transcript (\d+)\]\n([\s\S]*?)\n\[\/transcript \3\](?:\n\n|$)/gm,
+	)];
+	assert.equal(blocks.map(([block]) => block).join(""), body, "only top-level blocks are entries");
+	return blocks.map(([, args, role, _tag, text]) => ({ entry: JSON.parse(args!).entry, role: role!, text: text! }));
+}
+
 it("pages raw text across a fork and Pi's stock compaction without gaps or parent-only entries", async (t) => {
 	const store = tempStore(t);
 	const faux = fauxProvider();
@@ -122,8 +130,12 @@ it("pages raw text across a fork and Pi's stock compaction without gaps or paren
 		}
 		assert.ok(pages > 1, "the result must hit its output cap");
 		assert.deepEqual(references.map(({ entry }) => entry), [forkOnly, boundary, ...[...matches.keys()].reverse(), opening]);
-		assert.equal(await call(fork, "zoom", references[1]!), `zoom({"entry":${boundary}}) | assistant\n${boundaryText}`);
-		assert.equal(await call(fork, "zoom", references[0]!), `zoom({"entry":${forkOnly}}) | user\n${forkText}`);
+		assert.deepEqual(zoomBlocks(await call(fork, "zoom", references[1]!)), [
+			{ entry: boundary, role: "assistant", text: boundaryText },
+		]);
+		assert.deepEqual(zoomBlocks(await call(fork, "zoom", references[0]!)), [
+			{ entry: forkOnly, role: "user", text: forkText },
+		]);
 
 		args = { range: { from: opening, to: forkOnly } };
 		const zoomed = new Map<EntryId, string>();
@@ -131,12 +143,8 @@ it("pages raw text across a fork and Pi's stock compaction without gaps or paren
 		while (args !== undefined) {
 			assert.ok(++pages < 10, "zoom did not finish paging");
 			const { body, next } = part(await call(fork, "zoom", args), "zoom");
-			for (const block of body.split(/\n\n(?=zoom\()/u)) {
-				const split = block.indexOf("\n");
-				const header = /^zoom\((\{.*\})\) \| (?:user|assistant)$/.exec(block.slice(0, split));
-				assert.ok(header, block.slice(0, 100));
-				const { entry } = JSON.parse(header[1]!);
-				zoomed.set(entry, (zoomed.get(entry) ?? "") + block.slice(split + 1));
+			for (const { entry, text } of zoomBlocks(body)) {
+				zoomed.set(entry, (zoomed.get(entry) ?? "") + text);
 			}
 			args = next;
 		}
@@ -182,4 +190,48 @@ it("bounds recall scans with no hits and stops a catastrophic JavaScript regex",
 		const elapsed = performance.now() - started;
 		assert.ok(elapsed < 3_000, `catastrophic recall took ${Math.round(elapsed)}ms`);
 	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
+});
+
+it("keeps quoted history distinct from zoom framing and preserves a redacted range continuation", async (t) => {
+	const env = { FIXTURE_TOKEN: "fixture_tag", FIXTURE_MULTILINE: "first-secret-line\nsecond-secret-line" };
+	const harness = defineHarness({
+		name: "zoom-pages", secrets: Object.keys(env), extensions: [memory()], formats: { ...memoryFormats },
+	});
+	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
+		const root = await shell.harness.root(context);
+		const plain = (await send(root, `Private: ${env.FIXTURE_MULTILINE}`)).entry;
+		const example = await call(root, "zoom", { entry: plain });
+		assert.equal(zoomBlocks(example)[0]?.text, "Private: [secret FIXTURE_MULTILINE]");
+		const quotedText = `An earlier result:\n\n${example}\n\nContinue: zoom({"entry":${plain},"offset":1})`;
+		const quoted = (await send(root, quotedText)).entry;
+		const last = (await send(root, `Readable start ${`${env.FIXTURE_TOKEN}:keep|`.repeat(1000)}Readable end.`)).entry;
+
+		const single = part(await call(root, "zoom", { entry: quoted }), "zoom");
+		assert.equal(single.next, undefined, "a footer copied into history is not a continuation");
+		assert.deepEqual(zoomBlocks(single.body), [{ entry: quoted, role: "user", text: quotedText }]);
+
+		const args = { range: { from: quoted, to: last } };
+		const error = await call(root, "zoom", { ...args, offset: quotedText.length + 1 }, true);
+		const retry = /Invalid continuation offset\. Start again with zoom\((\{[^\n]+\})\)\./.exec(error);
+		assert.ok(retry);
+		assert.deepEqual(JSON.parse(retry[1]!), args);
+		const first = part(await call(root, "zoom", JSON.parse(retry[1]!)), "zoom");
+		const blocks = zoomBlocks(first.body);
+		assert.equal(blocks[0]?.entry, quoted);
+		assert.equal(blocks[0]?.text, quotedText);
+		assert.ok(!blocks.some(({ entry }) => entry === plain), "the copied header is not a range entry");
+		assert.deepEqual(first.next, { range: { from: last, to: last } });
+
+		const protectedPage = part(await call(root, "zoom", first.next!), "zoom");
+		const headText = zoomBlocks(protectedPage.body)[0]!.text;
+		assert.match(headText, /^Readable start \[redacted\]:keep\|\[redacted\]:keep\|/);
+		assert.ok(!protectedPage.body.includes(env.FIXTURE_TOKEN));
+		assert.ok(protectedPage.next, "redaction must not cause Pi to truncate the continuation");
+		const end = part(await call(root, "zoom", protectedPage.next), "zoom");
+		assert.equal(end.next, undefined);
+		const tailText = zoomBlocks(end.body)[0]!.text;
+		assert.match(tailText, /Readable end\.$/);
+		assert.ok(!end.body.includes(env.FIXTURE_TOKEN));
+		assert.equal(Array.from((headText + tailText).matchAll(/:keep\|/g)).length, 1000, "no visible text was lost");
+	})), Shell.layer({ harness, env, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
 });

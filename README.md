@@ -98,7 +98,7 @@ shell API that the last tag lacks. Copy `template/.`, not `template/*`, so the d
 `.agents/`) come too. Then run `.agents/setup` and commit the `package-lock.json` its first install writes:
 
 ```sh
-git clone --quiet --depth 1 --branch v<version> https://ampcode.com/@najib/galangan.git /tmp/galangan
+git clone --quiet --depth 1 --branch v<version> https://github.com/najibninaba/galangan.git /tmp/galangan
 mkdir my-harness && cp -r /tmp/galangan/template/. my-harness/
 cd my-harness && git init && ./.agents/setup && npm run ci
 ```
@@ -129,12 +129,10 @@ because Pi does not check collisions (a later extension's tool silently replaces
 your harness's own prefix, as tally uses `tally.`. Pi, pi-ai, chord, pi-schema and Effect are exact peer dependencies,
 so a harness gets the same copies the shell runs on.
 
-A harness repo installs Galangan with npm as a git dependency pinned to a release tag, plus the exact peers from
-[Pins](#pins). The ampcode.com remote needs Amp git credentials (an orb has them); pnpm also needs `galangan` in its
-`allowBuilds` list before it runs the build:
+A harness repo installs Galangan from npm at an exact release, plus the exact peers from [Pins](#pins):
 
 ```sh
-npm install --save-exact "galangan@git+https://ampcode.com/@najib/galangan.git#v0.2.2" \
+npm install --save-exact galangan@0.2.3 \
   @earendil-works/pi-durable@1.5.2 @earendil-works/pi-ai@1.5.2 @earendil-works/chord@1.5.2 \
   @earendil-works/pi-schema@1.5.2 effect@4.1.4
 npm install --save-dev @types/node   # galangan/testing's types use node:test
@@ -142,8 +140,9 @@ npm install --save-dev @types/node   # galangan/testing's types use node:test
 
 Copy `tsconfig.json`'s `skipLibCheck: true` too: a dependency of pi-ai ships declarations that do not type-check.
 
-Node does not strip types under `node_modules`, so npm runs Galangan's `prepare` script (`npm run build`, tsc into
-`dist/` with `.d.ts`) when it installs the tag; the harness repo itself still runs `.ts` with no build step. Inside
+Node does not strip types under `node_modules`, so the published package is the build (`npm run build`, tsc into
+`dist/` with `.d.ts`, which `npm publish` runs through `prepare`); the harness repo itself still runs `.ts` with no
+build step. Inside
 this repository the npm scripts set `--conditions=galangan-source`, which points `galangan` back at `src/`: no build
 is needed, and tests that import both `../src` and `galangan` share one copy of `Shell` and its errors. Run a file
 directly with `node --conditions=galangan-source ...`; without it `galangan` loads `dist/`, a second copy that

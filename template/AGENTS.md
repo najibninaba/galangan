@@ -12,16 +12,14 @@ harness that every harness needs goes back there, and into Galangan itself if th
 ## Galangan conventions
 
 Galangan is the shell this harness runs on: the store, the Pi Harness lifecycle, model choice and the CLI. Its README
-(`node_modules/galangan/README.md`) is the reference; its `CHANGELOG.md`, which has the upgrade steps, is in the
-Galangan repository at the pinned tag.
+(`node_modules/galangan/README.md`) is the reference, and its `CHANGELOG.md` (`node_modules/galangan/CHANGELOG.md`)
+has the upgrade steps.
 
 ### Commands
 
-- `.agents/setup` installs dependencies (orbs run it): it first checks that Git can read the Galangan repository and
-  runs `amp git-setup` when it cannot, then `npm install` the first time, which writes the `package-lock.json` to
-  commit, then `npm ci`. `npm run check` is tsc with no emit, and `npm test` is node --test,
-  which also runs Galangan's conformance cases. `npm run ci` runs both; run it before every commit. There is no CI
-  workflow: the repository host has no runner with Amp git credentials to install Galangan.
+- `.agents/setup` installs dependencies (orbs run it): `npm install` the first time, which writes the
+  `package-lock.json` to commit, then `npm ci`. `npm run check` is tsc with no emit, and `npm test` is node --test,
+  which also runs Galangan's conformance cases. `npm run ci` runs both; run it before every commit.
 - `npm start -- --init` creates the store (only `--init` does); `npm start -- '<message>'` sends one message; `npm
   start` reads one message per stdin line. `GALANGAN_MODEL=real` uses a real model and needs `OPENAI_API_KEY`.
 - Node runs the `.ts` files directly (type stripping). Keep TypeScript erasable: no enums, namespaces or parameter
@@ -57,9 +55,10 @@ Galangan repository at the pinned tag.
 
 ### Pins and upgrades
 
-- Pins are exact (`.npmrc` `save-exact=true`, committed `package-lock.json`). Galangan is a git dependency pinned to a
-  release tag; Pi (`pi-durable`, `pi-ai`, `chord`, `pi-schema`) and `effect` are its exact peers and move with it.
-- Upgrade by bumping the Galangan tag to a newer release, setting the peers to the versions its README's Pins table
+- Pins are exact (`.npmrc` `save-exact=true`, committed `package-lock.json`). Galangan is the npm
+  package `galangan` at an exact release; Pi (`pi-durable`, `pi-ai`, `chord`, `pi-schema`) and `effect` are its exact
+  peers and move with it.
+- Upgrade by bumping `galangan` to a newer release, setting the peers to the versions its README's Pins table
   names, fixing `tsc` errors by the CHANGELOG's `Migration:` lines, and running conformance on a store backup before
   deploying. Pi store migrations are one-way: roll back by restoring the `<store>.<UTC time>.bak` the upgrade wrote.
 

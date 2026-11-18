@@ -23,7 +23,7 @@ it("pins the template to this release's tag and exact peers", () => {
 	const own = json("package.json");
 	const template = json("template/package.json");
 	const { galangan, ...peers } = template.dependencies;
-	assert.equal(galangan, `git+https://ampcode.com/@najib/galangan.git#v${own.version}`);
+	assert.equal(galangan, own.version);
 	assert.deepEqual(peers, own.peerDependencies);
 	for (const [name, version] of Object.entries(template.devDependencies)) {
 		assert.equal(version, own.devDependencies[name], name);

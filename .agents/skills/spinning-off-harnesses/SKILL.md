@@ -5,7 +5,7 @@ description: "Spins off a new standalone harness repo from Galangan's template: 
 
 # Spinning off a harness repo
 
-A harness repo is its own git repository. It depends on Galangan as a git dependency pinned to a release tag, plus Galangan's exact Pi and Effect peers, and its code imports only `galangan` and `galangan/testing`. It starts as a copy of Galangan's `template/`, whose `src/` holds tally, the example harness. The copy is mechanical. Spend your attention on the name, the rename, and the harness half of AGENTS.md.
+A harness repo is its own git repository. It depends on the npm package `galangan` at an exact release, plus Galangan's exact Pi and Effect peers, and its code imports only `galangan` and `galangan/testing`. It starts as a copy of Galangan's `template/`, whose `src/` holds tally, the example harness. The copy is mechanical. Spend your attention on the name, the rename, and the harness half of AGENTS.md.
 
 ## Ask first
 
@@ -25,8 +25,8 @@ Below, `<name>` is the harness name, `<snake>` is that name with hyphens replace
 Run these from the root of the Galangan checkout. The new repo goes next to it, at `../<name>`, never inside it.
 
 ```sh
-git ls-remote --tags --refs https://ampcode.com/@najib/galangan.git 'v*' | sed 's#.*refs/tags/##' | sort -V | tail -1
-rm -rf /tmp/galangan-<tag> && git -c advice.detachedHead=false clone --quiet --depth 1 --branch <tag> https://ampcode.com/@najib/galangan.git /tmp/galangan-<tag>
+git ls-remote --tags --refs https://github.com/najibninaba/galangan.git 'v*' | sed 's#.*refs/tags/##' | sort -V | tail -1
+rm -rf /tmp/galangan-<tag> && git -c advice.detachedHead=false clone --quiet --depth 1 --branch <tag> https://github.com/najibninaba/galangan.git /tmp/galangan-<tag>
 mkdir ../<name> && cp -r /tmp/galangan-<tag>/template/. ../<name>/
 cd ../<name> && git init --quiet --initial-branch=main && ./.agents/setup && npm run ci
 ```
@@ -35,7 +35,7 @@ cd ../<name> && git init --quiet --initial-branch=main && ./.agents/setup && npm
 - Copy from the tag, not from a Galangan checkout's `main`: between releases `main` can carry shell API or peers that the tag the template pins lacks, and `test/template.test.ts` only holds the template in step at release commits.
 - Copy `template/.`, not `template/*`, so `.npmrc`, `.gitignore` and `.agents/` come too.
 - The clone warns that the tag "is not a commit". That is harmless: the tag is annotated.
-- Keep the template's pin `galangan@git+…#<tag>`. Pinning to the release commit means the committed `package-lock.json` records that tag's commit. Step 4 checks this.
+- Keep the template's pin: `galangan` at the tag's version without the `v`, which the committed `package-lock.json` records as the npm tarball of that version. Step 4 checks this.
 
 ## 2. Rename tally to the harness
 
@@ -62,7 +62,7 @@ Write in the harness half only facts an agent in this repo cannot infer from its
 - What the harness is for, in the requester's words.
 - Its names: the harness `<name>`, the prefix `<name>.` for doc kinds and extensions, the prefix `<snake>_` for tools, and the store `~/.galangan/<name>.sqlite`.
 - Its tools and doc kinds now: `<snake>_tally` and `<name>.counts`, marked as the starting counter that the first real tool replaces.
-- Upstream: Galangan at `<tag>` (`https://ampcode.com/@najib/galangan`). Fold-backs to Galangan go in Linear, team Bijandev, project Galangan, as described in "Fold-backs" below; write that procedure into this half, because this skill is not loaded in the harness repo. Name the owner.
+- Upstream: Galangan at `<tag>` (`https://github.com/najibninaba/galangan`, npm `galangan`). Fold-backs to Galangan go in Linear, team Bijandev, project Galangan, as described in "Fold-backs" below; write that procedure into this half, because this skill is not loaded in the harness repo. Name the owner.
 
 ## 4. Install and verify
 
@@ -71,13 +71,12 @@ Run these from the new repo's root:
 ```sh
 ./.agents/setup && npm run ci    # tsc, then node --test including "galangan conformance: <name>"
 jq -r '.packages["node_modules/galangan"].resolved' package-lock.json
-git ls-remote --exit-code https://ampcode.com/@najib/galangan.git 'refs/tags/<tag>^{}'
 mkdir -p /tmp/<name>-check && GALANGAN_DATA=/tmp/<name>-check npm start -- --init
 GALANGAN_DATA=/tmp/<name>-check npm start -- 'call <snake>_tally {"label":"cups"}'    # prints: <snake>_tally: cups = 1
 ls /tmp/<name>-check                                                                   # <name>.sqlite, not tally.sqlite
 ```
 
-- The lockfile's `resolved` URL must end with the commit that `git ls-remote` prints for `<tag>^{}`.
+- The lockfile's `resolved` URL must be `https://registry.npmjs.org/galangan/-/galangan-<version>.tgz`, where `<version>` is `<tag>` without the `v`.
 - Set `GALANGAN_DATA` on each `npm start` line, as above, so the check never leaves a store in `~/.galangan`. If `/tmp/<name>-check` already holds a store, `--init` says so; delete the directory first.
 
 Then commit everything, including `package-lock.json`: `git add -A && git commit -m "Start <name> from the Galangan <tag> template"`.
@@ -97,7 +96,7 @@ git rebase origin/main && npm run ci && git push -u origin main
 
 Outside an orb, `amp projects create --push --personal --name <name>` from the new repo's root is meant to do this in one step; it has not been tried yet.
 
-Orbs for the project run `.agents/setup` on their own, and it needs no pre-setup script: from v0.2.2 the template's setup checks that Git can read Galangan and runs `amp git-setup` when it cannot, because a fresh harness-project orb can start with a Git credential ampcode.com rejects (BIJAN-163). A harness copied from an older tag needs that step copied into its `.agents/setup`. Confirm the push with `git ls-remote origin main`, which must print your `HEAD`, and `amp projects status` from the new repo's root: it prints the project its git remote matches, and that project's URL is the repository URL for the registry.
+Orbs for the project run `.agents/setup` on their own, and it needs no pre-setup script, because Galangan comes from npm. A harness copied from v0.2.2 or older takes Galangan from a git dependency, which fails in fresh orbs (BIJAN-163): move it to npm as the 0.2.3 CHANGELOG says. Confirm the push with `git ls-remote origin main`, which must print your `HEAD`, and `amp projects status` from the new repo's root: it prints the project its git remote matches, and that project's URL is the repository URL for the registry.
 
 Then add the harness to the downstream registry: one row in `HARNESSES.md` at the root of the Galangan repo. If the file does not exist yet, create it with this header (BIJAN-154 owns the registry and the review routine that reads it):
 

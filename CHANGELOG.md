@@ -3,6 +3,31 @@
 Each release says whether it migrates the store and gives a `Migration:` line for every change harness code must
 make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for release lines and how to upgrade.
 
+## 0.2.3 - 2026-11-18
+
+Galangan is public: the repository is https://github.com/najibninaba/galangan and the package is `galangan` on npm.
+Still on Pi Durable 1.5.2 and Effect 4.1.4, and no change to the shell's API.
+
+Store: no Pi migration; Pi stays at 1.5.2 (schema 2). The first open by 0.2.3 of a store 0.2.2 stamped copies it to
+`<store>.<UTC time>.bak` and restamps it; 0.2.2 then refuses that store (exit 78), so roll back by restoring the
+backup.
+
+Upgrading from 0.2.2: run `npm install --save-exact galangan@0.2.3`, which replaces the git dependency, and copy
+`template/.agents/setup` and the Galangan half of `template/AGENTS.md` from this tag. Nothing else in harness code
+changes.
+
+### Fixed
+
+- Harness orb setup (BIJAN-163): a fresh orb of a harness project could not fetch the git dependency on the
+  Amp-hosted Galangan repository, because setup's credential cannot read another project's repository. 0.2.2's
+  `amp git-setup` step did not fix it. Harnesses now take Galangan from npm, and the template's setup has no Git step.
+
+### Changed
+
+- The package is no longer `private`, and ships `CHANGELOG.md` beside `dist/`.
+
+Migration: replace the `galangan` git dependency with `galangan@0.2.3` (above).
+
 ## 0.2.2 - 2026-11-18
 
 Template and skill fixes found by kirim, the first published harness (BIJAN-156). Still on Pi Durable 1.5.2 and Effect

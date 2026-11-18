@@ -19,9 +19,10 @@ minor can break its API, and its store migrations are one-way, so Galangan's ver
   to the shell's own API also opens a new minor on the same Pi: 0.1.x and 0.2.x are Pi 1.5.x.
 - Shell fixes and Pi patch bumps ship as patch releases on the newest line only. There are no backports to older lines;
   a harness that needs a fix moves to the newest line.
-- Every release is a commit that sets `package.json` `version` (and `WRITER` in `src/shell.ts` and the Galangan tag in
-  `template/package.json`, which tests keep equal), adds a `CHANGELOG.md` entry, and carries an annotated
-  tag `v<version>` on `main`. `npm run check` and `npm test` pass on that commit.
+- Every release is a commit that sets `package.json` `version` (and `WRITER` in `src/shell.ts` and the Galangan version
+  in `template/package.json`, which tests keep equal), adds a `CHANGELOG.md` entry, and carries an annotated tag
+  `v<version>` on `main`, pushed to GitHub and published to npm with `npm publish` from that commit. `npm run check`
+  and `npm test` pass on that commit.
 
 ## 3. Release notes
 
@@ -59,5 +60,6 @@ predates the stamp and does not check it.
 ## 6. Open decisions
 
 - Follow every Pi minor (this policy) or bump only on need, as Lunas does. Owner to confirm.
-- Distribution. The package is Apache-2.0 but `private: true`, so for now harnesses take Galangan from the repository at
-  a release tag. Public npm, a private registry or git dependencies are still to be decided.
+- Distribution, decided in 0.2.3: Galangan is public, at https://github.com/najibninaba/galangan and on npm as
+  `galangan`. Harnesses depend on the exact npm release. The git dependency on the Amp-hosted repository failed in
+  fresh harness orbs, whose setup cannot read another project's repository (BIJAN-163).

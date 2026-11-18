@@ -176,13 +176,13 @@ export const myHarness = defineHarness({ name: "mine", secrets: ["TODOIST_API_TO
 tool fails only when the model calls it. Galangan wraps tools in their installed extensions, so redaction follows
 the tools through helper recovery, forks and conversation configuration. The wrapper redacts live output, details
 and diagnostics before Pi receives them. A final tool hook redacts exact values in results, including diagnostic
-codes and handoffs. A stream holds a possible secret prefix until it can match it and masks a remaining prefix
+codes and handoffs. A stream holds a possible secret prefix until it can match it and omits a remaining prefix
 when the tool throws or is interrupted. Returning a result preserves incomplete prefixes, including when the
-result reports an error. With redaction active, Pi bounds output after redaction and callers receive no source-side
-tail window. When named secret markers would push an explicit tool result over its declared limits, Galangan uses
-compact markers to keep an otherwise in-budget result intact. A tool reading retained output sees the text accepted
-by Pi so far. A structured result built from that snapshot can omit a trailing prefix that appears in the final
-streamed output.
+result reports an error. Redaction never adds bytes or lines to tool output text: output uses `[secret NAME]` only
+if it fits in the matched value's space, and a shorter marker otherwise. If the rewritten output would contain a
+protected value, the shell withholds the unsafe text. Pi bounds output after redaction and callers receive no
+source-side tail window. A tool reading retained output sees the text accepted by Pi so far; that snapshot can omit
+a trailing prefix that appears in the final streamed output.
 
 Tools and hooks must keep secrets out of arguments (including values added by hooks and nested calls), their own
 commits and memos, prompts, and spill files. Use secret-free payloads for schema-validated fields because a

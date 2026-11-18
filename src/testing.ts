@@ -217,7 +217,7 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 					{ requestId: "secret-interrupt" }));
 				yield* Effect.promise(() => ready);
 				const live = yield* Effect.promise(() => shell.harness.snapshot(LiveDoc, root.id, BACKGROUND_CONTEXT));
-				assert.ok(live?.tools?.some((tool) => tool.output?.includes(`☕ [secret ${secrets[0]}]`)));
+				assert.ok(live?.tools?.some((tool) => tool.output?.startsWith("☕ ") && tool.output.includes("[redacted]")));
 				inspect();
 			}));
 			inspect();
@@ -246,7 +246,9 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 				const settled = await (await fork.submit(call, context)).wait(context);
 				assert.ok(settled.status === "done" && settled.type === "input");
 				const answer = await fork.commit((tx) => tx.entry(AssistantEntry, settled.answer), context);
-				assert.ok(JSON.stringify(answer?.model).includes(`[secret ${secrets[0]}]`));
+				const message = answer?.model?.[0];
+				assert.ok(message?.role === "assistant" && message.content.some((part) =>
+					part.type === "text" && part.text.startsWith("galangan_probe_secret: sent ") && part.text.includes("[redacted]")));
 			})));
 			for (const value of Object.values(env)) assert.equal(readFileSync(path).includes(value), false);
 		});
@@ -256,8 +258,8 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 			const marks = secrets.map((name) => `[secret ${name}]`).join(" ");
 			const [sent, threw = ""] = await ask(path, ['call galangan_probe_secret {"how":"return"}'],
 				['call galangan_probe_secret {"how":"throw"}']);
-			// The model still learns which secret was involved.
-			assert.ok(sent?.startsWith(`galangan_probe_secret: sent ${marks}`));
+			assert.ok(sent?.startsWith("galangan_probe_secret: sent ") && sent.includes("[redacted]"));
+			// Diagnostic messages are not bounded output text and keep the secret names.
 			assert.match(threw, /^galangan_probe_secret failed: /);
 			assert.ok(threw.includes(`with ${marks} failed`), threw);
 			// The file itself, not what Pi reads back: a value anywhere in it, a page or the WAL, is a leak.

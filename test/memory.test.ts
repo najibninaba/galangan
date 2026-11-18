@@ -6,7 +6,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import {
-	CompactionEntry, ToolResultEntry, type Conversation, type EntryId, type InputEntry,
+	CompactionEntry, defineExtension, hook, ToolResultEntry, ToolTask, type Conversation, type EntryId, type InputEntry,
 } from "@earendil-works/pi-durable";
 import { Effect } from "effect";
 import { defineHarness, Shell } from "galangan";
@@ -192,10 +192,18 @@ it("bounds recall scans with no hits and stops a catastrophic JavaScript regex",
 	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
 });
 
-it("keeps quoted history distinct from zoom framing and preserves a redacted range continuation", async (t) => {
+it("keeps quoted zoom framing and redacted continuations intact when an earlier hook copies output", async (t) => {
 	const env = { FIXTURE_TOKEN: "fixture_tag", FIXTURE_MULTILINE: "first-secret-line\nsecond-secret-line" };
+	let copied = 0;
+	const copyOutput = defineExtension({ name: "copy-output", hooks: [hook(ToolTask, {
+		afterTool(call, result) {
+			if (call.name !== "zoom" || result.output === undefined) return;
+			copied++;
+			return { ...result, output: [...result.output] };
+		},
+	})] });
 	const harness = defineHarness({
-		name: "zoom-pages", secrets: Object.keys(env), extensions: [memory()], formats: { ...memoryFormats },
+		name: "zoom-pages", secrets: Object.keys(env), extensions: [copyOutput, memory()], formats: { ...memoryFormats },
 	});
 	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
 		const root = await shell.harness.root(context);
@@ -233,5 +241,6 @@ it("keeps quoted history distinct from zoom framing and preserves a redacted ran
 		assert.match(tailText, /Readable end\.$/);
 		assert.ok(!end.body.includes(env.FIXTURE_TOKEN));
 		assert.equal(Array.from((headText + tailText).matchAll(/:keep\|/g)).length, 1000, "no visible text was lost");
+		assert.ok(copied > 0, "the hook must copy tool output before redaction");
 	})), Shell.layer({ harness, env, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
 });

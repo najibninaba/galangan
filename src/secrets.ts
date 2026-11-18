@@ -1,95 +1,166 @@
-// Secrets a harness's tools read from the environment, such as an API token (BIJAN-164, from kirim's Todoist token).
-//
-// A harness names them in `HarnessSpec.secrets`. The CLI checks them at startup, so a missing one is a configuration
-// error (exit 78) instead of a failed tool call partway through a conversation. And the shell keeps their values out
-// of the store: Pi commits every tool result, error results included, and a tool's error message can quote what it
-// sent, so the `galangan.secrets` extension's `afterTool` hook replaces each value with `[secret NAME]` before the
-// commit. The hook is Pi's redaction point: it sees every result a tool task writes, also the error results the
-// Harness writes itself, and it runs after the harness's own hooks because the shell selects it last.
-//
-// It matches exact values only. A tool that encodes a secret (base64, URL escapes) is outside this policy.
-// Tool arguments written by the model are outside this policy.
-import { defineExtension, hook, wrapTool, ToolTask, type ToolRegistration, type Extension, type ToolExecutionResult } from "@earendil-works/pi-durable";
+// Protect live tool progress before Pi can commit it, then redact tool results in the selected extensions' hooks.
+// The shell decorates installed extensions by name, so protection follows their tools through a fork or reconfigure.
+// Tools still read credentials from the environment. Encoded values and tool arguments are outside this policy.
+import {
+	hook, ToolTask, type Extension, type ToolDiagnostic, type ToolExecutionApi, type ToolExecutionResult,
+	type ToolRegistration,
+} from "@earendil-works/pi-durable";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { HarnessSpec } from "./harness.ts";
 
-export const SECRETS_EXTENSION = "galangan.secrets";
-
 export type Env = { readonly [name: string]: string | undefined };
 
-/** The harness's secrets that `env` leaves unset or empty. */
 export const missingSecrets = (spec: HarnessSpec, env: Env): string[] =>
 	(spec.secrets ?? []).filter((name) => (env[name] ?? "") === "");
 
-/** Replaces the value of each of `spec`'s secrets set in `env` with `[secret NAME]`, longest value first. */
-export function redactor(spec: HarnessSpec, env: Env): (text: string) => string {
-	const values = (spec.secrets ?? []).flatMap((name) => (env[name] ?? "") === "" ? [] : [[name, env[name]!] as const])
-		.sort(([, a], [, b]) => b.length - a.length);
-	return (text) => values.reduce((redacted, [name, value]) => redacted.replaceAll(value, `[secret ${name}]`), text);
+export function secretProtection(spec: HarnessSpec, env: Env) {
+	const marks = new Map<string, string>();
+	for (const name of spec.secrets ?? []) {
+		const value = env[name];
+		if (value && !marks.has(value)) marks.set(value, `[secret ${name}]`);
+	}
+	const values = [...marks.keys()].sort((a, b) => b.length - a.length);
+	if (values.length === 0) return undefined;
+
+	// A named marker can itself contain a short secret or a credential that matches a variable name.
+	const safeMark = (mark: string) => values.every((value) => !mark.includes(value));
+	const fallback = ["[redacted]", "█", ""].find(safeMark)!;
+	for (const [value, mark] of marks) if (!safeMark(mark)) marks.set(value, fallback);
+
+	const pattern = new RegExp(values.map((value) => RegExp.escape(value)).join("|"), "g");
+	const redact = (text: string): string => text.replace(pattern, (value) => marks.get(value)!);
+	const json = (value: JsonValue): JsonValue => {
+		if (typeof value === "string") return redact(value);
+		if (Array.isArray(value)) return value.map(json);
+		if (value !== null && typeof value === "object") {
+			return Object.fromEntries(Object.entries(value).map(([key, item]) => [redact(key), json(item)]));
+		}
+		return value;
+	};
+	const diagnostic = (value: ToolDiagnostic): ToolDiagnostic => ({
+		...value,
+		message: redact(value.message),
+		...(value.code === undefined ? {} : { code: redact(value.code) }),
+	});
+	const afterTool = (_call: unknown, result: ToolExecutionResult): ToolExecutionResult => {
+		const output = result.output?.map((part) => {
+			if (part.type !== "text") return part;
+			const text = redact(part.text);
+			return text === part.text ? part : { ...part, text };
+		});
+		return {
+			...result,
+			// Pi uses the array identity to decide whether to retain its progress truncation diagnostic.
+			...(output?.some((part, index) => part !== result.output?.[index]) ? { output } : {}),
+			...(result.structuredOutput === undefined ? {} : { structuredOutput: json(result.structuredOutput) }),
+			...(result.details === undefined ? {} : { details: json(result.details) }),
+			...(result.diagnostics === undefined ? {} : { diagnostics: result.diagnostics.map(diagnostic) }),
+			...(result.control?.handoff === undefined ? {} : {
+				control: { ...result.control, handoff: redact(result.control.handoff) },
+			}),
+		};
+	};
+	const guardedOutputs = new WeakSet<ToolExecutionApi["output"]>();
+	const protectTool = (tool: ToolRegistration): ToolRegistration => ({
+		...tool,
+		execute: async (args, api, context) => {
+			// An extension wrapper may call the tool it wraps with the same protected API.
+			if (guardedOutputs.has(api.output)) return tool.execute(args, api, context);
+			const stream = redactStream(values, marks, api.output);
+			guardedOutputs.add(stream.output);
+			// Copy own properties for harness wrappers that spread the API, preserving Pi's live getters.
+			const protectedApi = Object.defineProperties({}, Object.getOwnPropertyDescriptors(api)) as ToolExecutionApi;
+			Object.assign(protectedApi, {
+				output: stream.output,
+				// A tail skip could remove part of a secret before this wrapper sees it.
+				outputWindow: undefined,
+				details: ((value, ctx) => api.details(json(value), ctx)) satisfies ToolExecutionApi["details"],
+				diagnostic: (value: ToolDiagnostic) => api.diagnostic(diagnostic(value)),
+			});
+			let completed = false;
+			try {
+				const result = await tool.execute(args, protectedApi, context);
+				completed = true;
+				return result;
+			} finally {
+				stream.end(!completed || context.abortSignal?.aborted === true);
+			}
+		},
+	});
+	return {
+		redact,
+		protect: (extension: Extension): Extension => ({
+			...extension,
+			...(extension.tools === undefined ? {} : { tools: extension.tools.map(protectTool) }),
+			...(extension.wraps === undefined ? {} : {
+				wraps: extension.wraps.map((wrap) => "tool" in wrap
+					? { ...wrap, wrap: (tool: ToolRegistration) => protectTool(wrap.wrap(tool)) }
+					: wrap),
+			}),
+			// The final hook follows the extension's own hooks. Whichever extension is selected last also
+			// sanitizes errors Pi generates without executing a tool.
+			hooks: [...(extension.hooks ?? []), hook(ToolTask, { afterTool })],
+		}),
+	};
 }
 
-/** The extension that redacts every tool result before Pi commits it. Installed for every harness, secrets or not. */
-export function secretsExtension(redact: (text: string) => string, tools: readonly ToolRegistration[], values: readonly string[]): Extension {
-	const json = (value: JsonValue): JsonValue =>
-		typeof value === "string"
-			? redact(value)
-			: Array.isArray(value)
-				? value.map(json)
-				: value !== null && typeof value === "object"
-					? Object.fromEntries(Object.entries(value).map(([key, item]) => [redact(key), json(item)]))
-					: value;
-	// A hook that throws is skipped, which would commit the result as it was, so this only maps strings.
-	const afterTool = (_call: unknown, result: ToolExecutionResult): ToolExecutionResult => ({
-		...result,
-		...(result.control === undefined ? {} : { control: { ...result.control,
-			...(result.control.handoff === undefined ? {} : { handoff: redact(result.control.handoff) }),
-		} }),
-		...(result.output === undefined ? {} : {
-			output: result.output.map((part) => (part.type === "text" ? { ...part, text: redact(part.text) } : part)),
-		}),
-		...(result.structuredOutput === undefined ? {} : { structuredOutput: json(result.structuredOutput) }),
-		...(result.details === undefined ? {} : { details: json(result.details) }),
-		...(result.diagnostics === undefined ? {} : {
-			diagnostics: result.diagnostics.map((diagnostic) => ({ ...diagnostic, message: redact(diagnostic.message), ...(diagnostic.code === undefined ? {} : { code: redact(diagnostic.code) }) })),
-		}),
-	});
-	return defineExtension({
-		name: SECRETS_EXTENSION,
-		wraps: tools.map((tool) => wrapTool(tool, (original) => ({
-			...original,
-			execute: async (args, api, context) => {
-				let pending = "";
-				const output = (chunk: string) => {
-					pending += chunk;
-					let safe = "";
-					let index = 0;
-					while (index < pending.length) {
-						const rest = pending.slice(index);
-						const match = values.filter((value) => rest.startsWith(value)).sort((a, b) => b.length - a.length)[0];
-						if (match !== undefined) {
-							safe += redact(match);
-							index += match.length;
-						} else if (values.some((value) => value.startsWith(rest))) {
-							break;
-						} else {
-							safe += pending[index++];
-						}
+// Keep only a possible secret prefix between chunks. Decode bytes incrementally, matching Pi's output buffer
+// when a string interrupts bytes or a stream starts with a UTF-8 BOM.
+function redactStream(values: readonly string[], marks: ReadonlyMap<string, string>, emit: (text: string) => void) {
+	const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+	let pending = "";
+	let started = false;
+	function scan(text: string, state: "open" | "complete" | "interrupted" = "open") {
+		pending += text;
+		let index = 0;
+		let safe = "";
+		while (index < pending.length) {
+			const match = values.find((value) => pending.startsWith(value, index));
+			if (pending.length - index < (values[0]?.length ?? 0)) {
+				const suffix = pending.slice(index);
+				const partial = values.find((value) => value.length > suffix.length && value.startsWith(suffix));
+				if (partial !== undefined) {
+					if (state === "open") break;
+					if (state === "interrupted") {
+						// A shorter value may match the start of a held, longer prefix.
+						const value = match?.length === suffix.length ? match : partial;
+						safe += marks.get(value)!;
+						index = pending.length;
+						break;
 					}
-					api.output(safe);
-					pending = pending.slice(index);
-				};
-				try {
-					return await original.execute(args, {
-						...api, output, outputWindow: undefined,
-						details: (value, ctx) => api.details(json(value), ctx),
-						diagnostic: (value) => api.diagnostic({ ...value, message: redact(value.message),
-							...(value.code === undefined ? {} : { code: redact(value.code) }) }),
-					}, context);
-				} finally {
-					if (pending !== "") api.output(redact(pending));
 				}
-			},
-		}))),
-		hooks: [hook(ToolTask, { afterTool })],
-	});
+			}
+			if (match === undefined) {
+				safe += pending[index++];
+			} else {
+				safe += marks.get(match)!;
+				index += match.length;
+			}
+		}
+		pending = pending.slice(index);
+		if (safe !== "") emit(safe);
+	}
+	return {
+		output(chunk: string | Uint8Array, skipped?: Parameters<ToolExecutionApi["output"]>[1]) {
+			if (skipped !== undefined) throw new Error("Skipped tool output is unavailable when redacting secrets");
+			if (typeof chunk === "string") {
+				const text = decoder.decode() + chunk;
+				started ||= text !== "";
+				scan(text);
+			} else {
+				let text = decoder.decode(chunk, { stream: true });
+				if (!started && text.startsWith("\ufeff")) {
+					text = text.slice(1);
+					started = true;
+				}
+				started ||= text !== "";
+				scan(text);
+			}
+		},
+		end(interrupted: boolean) {
+			// Flush the held prefix before a decoder replacement character can make it look unrelated.
+			if (interrupted) scan("", "interrupted");
+			scan(decoder.decode(), interrupted ? "interrupted" : "complete");
+		},
+	};
 }

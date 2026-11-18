@@ -7,7 +7,6 @@ import {
 	type EntryId, type Extension, type ModelRef, type TaskId,
 } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
-import { SECRETS_EXTENSION } from "./secrets.ts";
 
 const Budget = defineDoc<{ first?: EntryId; calls: TaskId[] }>({
 	kind: "galangan.helper.budget",
@@ -72,12 +71,7 @@ export function helper({
 					const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
 					await configure(tx, child.id, {
 						model, thinkingLevel,
-						// Stored by name, so this selects the shell's installed secrets extension: a child's tool
-						// results are committed in the child and need redacting there too.
-						extensions: [
-							...extensions.filter((candidate) => candidate.name !== extension.name && candidate.name !== SECRETS_EXTENSION),
-							{ name: SECRETS_EXTENSION },
-						],
+						extensions: extensions.filter((candidate) => candidate.name !== extension.name),
 						tools: { remove: extension.tools! },
 						modelTools: null,
 						instructions: "Return concise findings for the task, including uncertainties. The parent writes the user-facing answer.",

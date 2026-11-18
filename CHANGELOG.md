@@ -5,24 +5,19 @@ make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for r
 
 ## Unreleased
 
-Release held pending owner review. Live tool progress is redacted before Pi receives it, including secrets split
-across output chunks. Saved explicit conversation extension selections are repaired before tasks resume. Diagnostic
-codes and control handoffs are redacted too. Conformance inspects SQLite before settlement and after interrupted reopen.
-
 Secrets for harness tools (BIJAN-164, from kirim's `TODOIST_API_TOKEN`). Still on Pi Durable 1.5.2 and Effect 4.1.4.
 
-Store: no Pi migration. A new `galangan.secrets` extension is installed for every harness; it stores nothing and is
-not in the format stamp.
+Store: no Pi migration. Galangan wraps tools when installing extensions. Existing conversation selections need no
+rewrite, including helpers saved before the upgrade.
 
 ### Added
 
 - `defineHarness({ secrets: ["NAME", ...] })`: `runCli` exits 78 at startup, before the store opens, when a named
   variable is unset or empty, instead of the tool failing mid-conversation.
-- The `galangan.secrets` extension replaces each secret's value with `[secret NAME]` in every tool result (output,
-  structured output, details, diagnostics) before Pi commits it, and in `onReport` lines; `helper()` children select
-  it too. Exact values only. `ShellOptions.env` sets where values are read from (default `process.env`).
-- `conformance` has a case that sets made-up values for the harness's secrets and checks that a tool returning or
-  throwing them leaves none in the store file or its WAL.
+- Galangan replaces exact secret values with `[secret NAME]` in live tool progress, tool results and report lines.
+  The protection handles streamed UTF-8 and follows installed tools through forks and helper recovery.
+  `ShellOptions.env` sets where values are read from (default `process.env`).
+- `conformance` checks the SQLite file and WAL for test secrets before the tool settles and after interrupted reopen.
 
 Migration: none required. A harness whose tools read a variable lists it in `secrets` and can drop its own
 "is not set" check; copy the Secrets section of `template/AGENTS.md`.

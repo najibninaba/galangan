@@ -173,13 +173,19 @@ export const myHarness = defineHarness({ name: "mine", secrets: ["TODOIST_API_TO
 ```
 
 `runCli` then exits 78 at startup, naming the variable, when one is unset or empty, instead of starting a session whose
-tool fails only when the model calls it. And the shell's `galangan.secrets` extension, installed last for every
-harness, replaces each value with `[secret NAME]` in every tool result before Pi commits it: the output, structured
-output, details and diagnostics, so also a thrown error's message, in the root conversation and in `helper()`'s child.
-It matches exact values only. Encoded values (base64, URL escapes) and model-authored tool arguments remain outside
-this policy. Live tool output, details and diagnostics are redacted before Pi receives them. Amp project
-secrets reach only orbs of that project, so run a harness that needs one from a thread in its own project.
-`Shell.layer({ ..., env })` reads the values from `env` instead of `process.env`, as tests do.
+tool fails only when the model calls it. Galangan wraps tools in their installed extensions, so redaction follows
+the tools through helper recovery, forks and conversation configuration. The wrapper redacts live output, details
+and diagnostics before Pi receives them. A final tool hook redacts exact values in results, including diagnostic
+codes and handoffs. A stream holds a possible secret prefix until it can match it and masks a remaining prefix
+when the tool throws or is interrupted. Returning a result preserves incomplete prefixes, including when the
+result reports an error. With redaction active, Pi bounds output after redaction and callers receive no source-side
+tail window. A tool reading retained output sees the text accepted by Pi so far. A structured result built from
+that snapshot can omit a trailing prefix that appears in the final streamed output.
+
+Tools and hooks must keep secrets out of arguments (including values added by hooks and nested calls), their own
+commits and memos, prompts, and spill files. Use secret-free payloads for schema-validated fields because a
+redaction can change the value's shape. Encoded credentials are outside the exact-value policy. Amp project
+secrets reach only the orbs of that project. `Shell.layer({ ..., env })` lets tests supply their own values.
 
 Keep state that must survive a restart in Pi documents (`defineDoc`) changed inside `api.commit`, as `tally` does, not
 in module variables. Mark a tool `replay: "safe"` only when running it twice is harmless; otherwise a crash mid-call
@@ -237,7 +243,7 @@ are errors, not silently removed.
 | `examples/tally/` | The reference harness: `tally.ts`, its CLI `main.ts` (`npm start`) and its test, on public entries only |
 | `template/` | The starter a new harness repo copies: pins, tsconfig, AGENTS.md, `.agents/setup` and tally in `src/` |
 | `src/helper.ts` | Opt-in bounded foreground helper (Sol high by default) |
-| `src/secrets.ts` | `HarnessSpec.secrets`: the startup check and the `galangan.secrets` redaction hook |
+| `src/secrets.ts` | `HarnessSpec.secrets`: startup validation, tool wrappers and result redaction |
 | `test/shell.test.ts` | The shell over a real SQLite file: missing and locked stores, model changes, the stamp and backups, model choice |
 | `test/conformance.test.ts` | `conformance` on a copy of an existing store, which it leaves untouched (tally's own test runs it on new stores) |
 | `test/store.test.ts` | The CLI as processes: one default store from any directory, `--init` (once), the old `./data` hint, a second process refused, a newer store refused |

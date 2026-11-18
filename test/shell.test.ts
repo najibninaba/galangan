@@ -8,7 +8,8 @@ import { describe, it, type TestContext } from "node:test";
 import { createModels, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
-import { defineExtension } from "@earendil-works/pi-durable";
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { obj } from "@earendil-works/pi-schema";
 import { Effect } from "effect";
 import { tallyHarness } from "../examples/tally/tally.ts";
 import { chooseModel, chooseThinking, fauxModels, FAUX_MODEL, InvalidModel } from "../src/models.ts";
@@ -30,6 +31,32 @@ const withShell = <A, E>(store: string, program: Effect.Effect<A, E, Shell>, cre
 describe("shell", () => {
 	it("answers a message that calls no tool", async (t) => {
 		assert.equal(await withShell(tempStore(t), Shell.use((shell) => shell.ask("hello")), true), "ack: hello");
+	});
+
+	it("keeps Pi's byte output and tail window when the harness has no secrets", async (t) => {
+		const output = defineExtension({
+			name: "output-probe",
+			tools: [defineTool({
+				name: "output_probe",
+				description: "Streams UTF-8 bytes",
+				parameters: obj({}),
+				outputLimits: { retain: "tail" },
+				execute: async (_args, api) => {
+					assert.ok(api.outputWindow);
+					const bytes = new TextEncoder().encode("☕");
+					api.output(bytes.subarray(0, 1));
+					api.output(bytes.subarray(1));
+					return {};
+				},
+			})],
+		});
+		const answer = await Effect.runPromise(Effect.provide(Shell.use((shell) => shell.ask("call output_probe {}")),
+			Shell.layer({
+				harness: { name: "output-test", extensions: [output] },
+				choice: { models: fauxModels(), model: FAUX_MODEL },
+				store: tempStore(t), create: true,
+			})));
+		assert.equal(answer, "output_probe: ☕");
 	});
 
 	it("refuses a missing store unless asked to create it, and creates nothing", async (t) => {

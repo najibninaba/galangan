@@ -1,13 +1,14 @@
 // Foreground helper contracts over real SQLite and scripted faux models; no provider credentials or network.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it, type TestContext } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { AgentDoc, AssistantEntry } from "@earendil-works/pi-durable";
+import { AssistantEntry, defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { obj } from "@earendil-works/pi-schema";
 import { Effect } from "effect";
 import { defineHarness } from "../src/harness.ts";
 import { tallyHarness } from "../examples/tally/tally.ts";
@@ -19,20 +20,23 @@ function setup(t: TestContext, options: Parameters<typeof helper>[0] = {}, secre
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const faux = fauxProvider({ models: [{ id: "parent", reasoning: true }, { id: "helper", reasoning: true }] });
 	const models = createModels();
+	const store = join(dir, "store.sqlite");
+	const extensions = [...new Map([...tallyHarness.extensions, ...(options.extensions ?? [])]
+		.map((extension) => [extension.name, extension])).values()];
 	models.setProvider(faux.provider);
 	// Recreate extensions on reopen too: a closure-held budget must not survive merely because this is one process.
 	const layer = () => Shell.layer({
 		harness: defineHarness({
 			name: "helper-test",
 			secrets: ["HELPER_TEST_SECRET"],
-			extensions: [...tallyHarness.extensions, helper({
+			extensions: [...extensions, helper({
 				model: { provider: "faux", modelId: "helper" }, thinkingLevel: "high", ...options,
 			})],
 		}),
-		store: join(dir, "store.sqlite"), create: true, env: { HELPER_TEST_SECRET: secret },
+		store, create: true, env: { HELPER_TEST_SECRET: secret },
 		choice: { models, model: { provider: "faux", modelId: "parent" }, thinkingLevel: "medium" },
 	});
-	return { faux, models, layer };
+	return { faux, models, layer, store };
 }
 
 it("returns findings to the parent, caps parallel and later calls, and resets the budget for the next answer", async (t) => {
@@ -83,15 +87,28 @@ it("returns findings to the parent, caps parallel and later calls, and resets th
 		for (const record of conversations.items.filter((record) => record.owner !== undefined)) {
 			const child = yield* Effect.promise(() => shell.harness.conversation(record.id, context));
 			const agent = yield* Effect.promise(() => child!.agent(context));
-			assert.deepEqual(agent.extensions.map((extension) => extension.name), ["galangan.secrets"],
+			assert.deepEqual(agent.extensions.map((extension) => extension.name), [],
 				"no parent tools, sections or hooks by default");
 			assert.deepEqual(agent.tools, []);
 		}
 	}), layer()));
 });
 
-it("reattaches after reopening mid-helper without replenishing the answer's budget", async (t) => {
-	const { faux, layer } = setup(t);
+it("redacts a resumed helper's tool result without replenishing the answer's budget", async (t) => {
+	const secret = "test-only-helper-credential";
+	const probe = defineExtension({
+		name: "helper-probe",
+		tools: [defineTool({
+			name: "helper_probe",
+			description: "Returns a test tool result",
+			parameters: obj({}),
+			execute: async (_args, api, context) => {
+				await api.details({ token: secret }, context);
+				return { output: [{ type: "text", text: secret }] };
+			},
+		})],
+	});
+	const { faux, layer, store } = setup(t, { extensions: [probe] }, secret);
 	const started = Promise.withResolvers<void>();
 	faux.setResponses([
 		fauxAssistantMessage(fauxToolCall("delegate", { task: "first task" }), { stopReason: "toolUse" }),
@@ -108,18 +125,15 @@ it("reattaches after reopening mid-helper without replenishing the answer's budg
 		const root = await shell.harness.root(context);
 		const submission = await root.submit({ type: "input", content: "work" }, context);
 		await started.promise;
-		// Simulate a helper saved by 0.2.4 with an explicit extension selection.
-		await shell.harness.commit(async (tx) => {
-			for (const child of (await tx.scanConversations({}, 100)).items) {
-				if (child.id === root.id) continue;
-				const agent = await tx.doc(AgentDoc, child.id);
-				agent.extensions = [];
-			}
-		}, context);
+
 		return submission.id;
 	})), layer()));
 	faux.setResponses([
-		fauxAssistantMessage("recovered finding"),
+		fauxAssistantMessage(fauxToolCall("helper_probe", {}), { stopReason: "toolUse" }),
+		(transcript) => {
+			assert.match(JSON.stringify(transcript.messages.at(-1)), /\[secret HELPER_TEST_SECRET\]/);
+			return fauxAssistantMessage("recovered finding");
+		},
 		(transcript) => {
 			assert.match(JSON.stringify(transcript.messages.at(-1)), /recovered finding/);
 			return fauxAssistantMessage(fauxToolCall("delegate", { task: "third task" }), { stopReason: "toolUse" });
@@ -137,12 +151,7 @@ it("reattaches after reopening mid-helper without replenishing the answer's budg
 		},
 	]);
 	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
-		await shell.harness.commit(async (tx) => {
-			for (const child of (await tx.scanConversations({}, 100)).items) {
-				const agent = await tx.doc(AgentDoc, child.id);
-				if (Array.isArray(agent.extensions)) assert.ok(agent.extensions.includes("galangan.secrets"));
-			}
-		}, context);
+
 		const settled = await (await shell.harness.submission(id, context))!.wait(context);
 		assert.equal(settled.status, "done");
 		if (settled.status !== "done" || settled.type !== "input") assert.fail("input not answered");
@@ -151,6 +160,7 @@ it("reattaches after reopening mid-helper without replenishing the answer's budg
 		const conversations = await shell.harness.commit((tx) => tx.scanConversations({}, 10), context);
 		assert.equal(conversations.items.length, 4, "root and three children; the resumed child was reused, fourth refused");
 	})), layer()));
+	assert.equal(readFileSync(store).includes(secret), false);
 });
 
 it("gives a child only explicitly selected extensions, independent of the parent's tool filters, and redacts secrets there", async (t) => {
@@ -173,7 +183,7 @@ it("gives a child only explicitly selected extensions, independent of the parent
 		const records = await shell.harness.commit((tx) => tx.scanConversations({}, 10), context);
 		const child = (await shell.harness.conversation(records.items.find((record) => record.id !== root.id)!.id, context))!;
 		const agent = await child.agent(context);
-		assert.deepEqual(agent.extensions.map((extension) => extension.name), ["tally", "galangan.secrets"]);
+		assert.deepEqual(agent.extensions.map((extension) => extension.name), ["tally"]);
 		assert.deepEqual(agent.tools.map((tool) => tool.name), ["tally"]);
 	})), layer()));
 });

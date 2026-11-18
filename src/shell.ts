@@ -23,12 +23,12 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { SqliteDatabase } from "@earendil-works/chord/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { AgentDoc, AssistantEntry, createRegistry, Harness, type ModelRef } from "@earendil-works/pi-durable";
+import { AssistantEntry, createRegistry, Harness, type ModelRef } from "@earendil-works/pi-durable";
 import { CURRENT_SQLITE_SCHEMA_VERSION, SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { Context, Data, Effect, Layer, Predicate, Schedule } from "effect";
 import type { HarnessSpec } from "./harness.ts";
 import { chooseThinking, type ModelChoice } from "./models.ts";
-import { redactor, secretsExtension, type Env } from "./secrets.ts";
+import { secretProtection, type Env } from "./secrets.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -140,20 +140,6 @@ export class Shell extends Context.Service<Shell, {
 			const root = yield* Effect.promise(() => harness.root(context));
 			// root({ agent }) only configures a new conversation. Reconfigure before resuming existing work too.
 			yield* Effect.promise(() => root.configure({ model: choice.model, thinkingLevel }, context));
-			// Repair explicit selections before any persisted child task can resume.
-			yield* Effect.promise(() => harness.commit(async (tx) => {
-				let cursor;
-				do {
-					const page = await tx.scanConversations({}, 100, cursor);
-					for (const conversation of page.items) {
-						const agent = await tx.doc(AgentDoc, conversation.id);
-						if (Array.isArray(agent.extensions)) {
-							agent.extensions = [...agent.extensions.filter((name) => name !== "galangan.secrets"), "galangan.secrets"];
-						}
-					}
-					cursor = page.next;
-				} while (cursor !== undefined);
-			}, context));
 			harness.resume();
 			const ask = (content: string, options: { readonly requestId?: string } = {}) =>
 				Effect.gen(function* () {
@@ -202,12 +188,8 @@ async function open(
 	db: SqliteDatabase,
 	env: Env,
 ): Promise<Harness> {
-	const redact = redactor(spec, env);
-	// Last, so its afterTool hook sees what the harness's own hooks made of a result. Not in the stamp's formats: it
-	// stores nothing. Conversations that never chose their extensions follow `settings.extensions`, so it also reaches
-	// a store's existing root conversation.
-	const extensions = [...spec.extensions, secretsExtension(redact, spec.extensions.flatMap((extension) => extension.tools ?? []),
-		(spec.secrets ?? []).map((name) => env[name] ?? "").filter((value) => value !== ""))];
+	const protection = secretProtection(spec, env);
+	const extensions = protection === undefined ? spec.extensions : spec.extensions.map(protection.protect);
 	const registry = createRegistry();
 	for (const extension of extensions) registry.install(extension);
 	let formats: Formats;
@@ -238,7 +220,10 @@ async function open(
 		models: choice.models,
 		registry,
 		settings: { extensions, afterFailedRun: "withdraw" },
-		onReport: (report) => console.error(`[galangan:${spec.name}] ${report.kind}: ${redact(String(report.error))}`),
+		onReport: (report) => {
+			const error = String(report.error);
+			console.error(`[galangan:${spec.name}] ${report.kind}: ${protection?.redact(error) ?? error}`);
+		},
 	}, context);
 	connections.set(harness, db);
 	return harness;

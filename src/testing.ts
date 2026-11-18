@@ -13,7 +13,7 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
 import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
-import { LiveDoc, defineDoc, defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
+import { AssistantEntry, LiveDoc, defineDoc, defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
 import { Effect } from "effect";
 import type { HarnessSpec } from "./harness.ts";
@@ -93,8 +93,12 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 		],
 	});
 	// Made-up values for the harness's own secrets and one of the suite's, so the leak case runs for every harness.
-	const secrets = [...(spec.secrets ?? []), "GALANGAN_CONFORMANCE_SECRET"];
+	const prefixName = "GALANGAN_CONFORMANCE_PREFIX";
+	const secrets = [...(spec.secrets ?? []), "GALANGAN_CONFORMANCE_SECRET", prefixName];
 	const env = Object.fromEntries(secrets.map((name) => [name, `s${randomUUID().replaceAll("-", "")}`]));
+	const firstValue = env[secrets[0]!]!;
+	env[prefixName] = firstValue.slice(0, 12);
+	const partial = firstValue.slice(0, -1);
 	let progressReady: (() => void) | undefined;
 	const leaky = defineExtension({
 		name: "galangan.conformance.secrets",
@@ -105,11 +109,23 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 			parameters: obj({ how: str() }),
 			execute: async (args, api, context) => {
 				const values = Object.values(env).join(" ");
-				api.output(values.slice(0, 8));
-				api.output(values.slice(8));
+				if (args.how === "partial") {
+					api.output(`partial: ${partial}`);
+					throw new Error("tool stopped");
+				}
+				if (args.how === "ordinary" || args.how === "returned-error") {
+					api.output("listing files");
+					return { isError: args.how === "returned-error" };
+				}
+				const progress = new TextEncoder().encode(`☕ ${values}`);
+				// Split both the UTF-8 character and the first credential across chunks.
+				api.output(progress.subarray(0, 1));
+				api.output(progress.subarray(1, 8));
+				api.output(progress.subarray(8));
 				api.diagnostic({ severity: "info", code: values, message: values });
 				await api.details({ sent: values }, context);
 				if (args.how === "interrupt") {
+					api.output(` partial: ${partial}`);
 					await api.commit((tx) => tx.doc(LiveDoc, api.conversationId).then(() => undefined), context);
 					progressReady?.();
 					await new Promise((_, reject) => context.abortSignal?.addEventListener("abort",
@@ -188,20 +204,51 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 			const path = store(t);
 			const ready = new Promise<void>((resolve) => { progressReady = resolve; });
 			const inspect = () => {
-				for (const file of [path, `${path}-wal`].filter((file) => existsSync(file))) {
-					const bytes = readFileSync(file).toString("latin1");
-					for (const value of Object.values(env)) assert.equal(bytes.includes(value), false);
-				}
+				const files = [path, `${path}-wal`].filter((file) => existsSync(file)).map((file) => readFileSync(file));
+				for (const value of Object.values(env)) assert.ok(files.every((bytes) => !bytes.includes(value)));
+				assert.ok(files.every((bytes) => !bytes.includes(partial)));
 			};
 			await withShell(path, Effect.gen(function* () {
-				yield* Effect.forkChild((yield* Shell).ask('call galangan_probe_secret {"how":"interrupt"}',
+				const shell = yield* Shell;
+				const root = yield* Effect.promise(() => shell.harness.root(BACKGROUND_CONTEXT));
+				// Choose the tool's extension explicitly to exercise it without a default hook selection.
+				yield* Effect.promise(() => root.configure({ extensions: [leaky] }, BACKGROUND_CONTEXT));
+				yield* Effect.forkChild(shell.ask('call galangan_probe_secret {"how":"interrupt"}',
 					{ requestId: "secret-interrupt" }));
 				yield* Effect.promise(() => ready);
+				const live = yield* Effect.promise(() => shell.harness.snapshot(LiveDoc, root.id, BACKGROUND_CONTEXT));
+				assert.ok(live?.tools?.some((tool) => tool.output?.includes(`☕ [secret ${secrets[0]}]`)));
 				inspect();
 			}));
 			inspect();
 			await ask(path, ['call galangan_probe_secret {"how":"interrupt"}', "secret-interrupt"]);
 			inspect();
+			const [ordinary, returnedError, failed] = await ask(path, ['call galangan_probe_secret {"how":"ordinary"}'],
+				['call galangan_probe_secret {"how":"returned-error"}'], ['call galangan_probe_secret {"how":"partial"}']);
+			assert.equal(ordinary, "galangan_probe_secret: listing files");
+			assert.equal(returnedError, "galangan_probe_secret failed: listing files");
+			assert.match(failed!, /tool stopped/);
+			inspect();
+		});
+
+		it("redacts tool results in a fork with a saved extension selection", async (t) => {
+			const path = store(t);
+			await withShell(path, Shell.use((shell) => Effect.promise(async () => {
+				const context = BACKGROUND_CONTEXT;
+				const root = await shell.harness.root(context);
+				await root.configure({ extensions: [leaky] }, context);
+				const first = await (await root.submit({ type: "input", content: "save selection" }, context)).wait(context);
+				assert.ok(first.status === "done" && first.type === "input");
+				// Pi copies the earlier explicit selection, even if the parent's selection has since changed.
+				await root.configure({ extensions: [] }, context);
+				const fork = await root.fork(first.answer, { ownership: { kind: "ownerless" } }, context);
+				const call = { type: "input", content: 'call galangan_probe_secret {"how":"return"}' } as const;
+				const settled = await (await fork.submit(call, context)).wait(context);
+				assert.ok(settled.status === "done" && settled.type === "input");
+				const answer = await fork.commit((tx) => tx.entry(AssistantEntry, settled.answer), context);
+				assert.ok(JSON.stringify(answer?.model).includes(`[secret ${secrets[0]}]`));
+			})));
+			for (const value of Object.values(env)) assert.equal(readFileSync(path).includes(value), false);
 		});
 
 		it("keeps secret values out of the store, also when a tool's error quotes them", async (t) => {

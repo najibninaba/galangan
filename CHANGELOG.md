@@ -3,12 +3,17 @@
 Each release says whether it migrates the store and gives a `Migration:` line for every change harness code must
 make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for release lines and how to upgrade.
 
-## Unreleased
+## 0.2.5 - 2026-11-18
 
 Secrets for harness tools (BIJAN-164, from kirim's `TODOIST_API_TOKEN`). Still on Pi Durable 1.5.2 and Effect 4.1.4.
 
-Store: no Pi migration. Galangan wraps tools when installing extensions. Existing conversation selections need no
-rewrite, including helpers saved before the upgrade.
+Store: no Pi migration; Pi stays at 1.5.2 (schema 2). Galangan wraps tools when installing extensions, so existing
+conversation selections need no rewrite, including helpers saved before the upgrade. The first open by 0.2.5 of a
+store 0.2.4 stamped copies it to `<store>.<UTC time>.bak` and restamps it; 0.2.4 then refuses that store (exit 78), so
+roll back by restoring the backup.
+
+Upgrading from 0.2.4: run `npm install --save-exact galangan@0.2.5`, and copy the Secrets section of
+`template/AGENTS.md` from this tag.
 
 ### Added
 

@@ -6,6 +6,7 @@ import { once } from "node:events";
 import { Worker } from "node:worker_threads";
 import { awaitWithContext, withAbortSignal, type Context } from "@earendil-works/chord/context";
 import { boundOutput, utf8ByteLength } from "@earendil-works/chord/output";
+import { sanitizeSurrogates } from "@earendil-works/pi-ai/utils/sanitize-unicode";
 import {
 	CompactionEntry, defineExtension, defineTool, ResetEntry,
 	type Cursor, type EntryId, type EntryQuery, type EntryRecord, type Extension,
@@ -243,7 +244,8 @@ const zoom = defineTool({
 				});
 				// A clipped UTF-8 round trip replaces lone surrogates. Use its length, not its text.
 				const chunk = text.slice(at, at + bounded.length);
-				const used = new Set(Array.from(chunk.matchAll(/\[\/transcript (\d+)\]/g), ([, tag]) => tag));
+				// Pi's Responses adapter removes lone surrogates. This can create ASCII markers but not erase them.
+				const used = new Set(Array.from(sanitizeSurrogates(chunk).matchAll(/\[\/transcript (\d+)\]/g), ([, tag]) => tag));
 				let tag = 0;
 				while (used.has(String(tag))) tag++;
 				const block = header + quote(tag, chunk);

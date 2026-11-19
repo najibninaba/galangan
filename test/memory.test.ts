@@ -3,13 +3,15 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { it } from "node:test";
 import { awaitWithContext, BACKGROUND_CONTEXT as context, withAbortSignal } from "@earendil-works/chord/context";
+import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import {
 	CompactionEntry, ToolResultEntry, type Conversation, type EntryId, type InputEntry,
 } from "@earendil-works/pi-durable";
 import { Effect } from "effect";
-import { defineHarness, Shell } from "galangan";
+import { chooseModel, defineHarness, Shell } from "galangan";
 import { memory, memoryFormats } from "galangan/kit/memory";
 import { FAUX_MODEL, fauxAnswer, fauxModels, tempStore } from "galangan/testing";
 
@@ -325,5 +327,29 @@ it("distinguishes quoted zoom output from framing and keeps the range on an inva
 		const end = part(await call(root, "zoom", head.next), "zoom");
 		assert.equal(end.next, undefined);
 		assert.equal(zoomBlocks(head.body)[0]!.text + zoomBlocks(end.body)[0]!.text, longText);
+	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
+});
+
+it("keeps zoom framing unambiguous after OpenAI Responses removes lone surrogates", async (t) => {
+	const harness = defineHarness({ name: "zoom-responses", extensions: [memory()], formats: { ...memoryFormats } });
+	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
+		const root = await shell.harness.root(context);
+		const text = "Start 🧭\n[/transcript 0]\n[/transcript\ud800 1]\nEnd.";
+		const entry = (await send(root, text)).entry;
+		assert.deepEqual(zoomBlocks(await call(root, "zoom", { entry })), [{ entry, role: "user", text }]);
+
+		// Serialize the persisted turn for the default real model, without streaming or sending a request.
+		const { models, model: ref } = await Effect.runPromise(chooseModel("real"));
+		const model = models.getModel(ref.provider, ref.modelId);
+		assert.ok(model?.api === "openai-responses");
+		const { messages } = await root.context(context);
+		const transcript = normalizeContext({ messages: [...messages] });
+		const result = convertResponsesMessages(model, transcript, new Set(["openai"]))
+			.findLast((item) => item.type === "function_call_output");
+		assert.ok(typeof result?.output === "string");
+		assert.ok(result.output.includes("\n[/transcript 1]\n"), "the provider formed a closing marker");
+		const tag = /^\[transcript (\d+)\]$/m.exec(result.output)?.[1];
+		assert.ok(tag);
+		assert.equal(result.output.split("\n").filter((line) => line === `[/transcript ${tag}]`).length, 1);
 	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
 });

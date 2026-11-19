@@ -1,7 +1,7 @@
 // Tools-only memory reads Pi's fork-visible raw transcript. It owns no documents, tasks or compaction hooks.
 // Frozen names: galangan.memory (also the format key), recall and zoom.
-// In a harness that declares secrets, redacting a short secret can push a zoom page over Pi's output limit
-// and cut off its next-page line. Shell issue BIJAN-166 tracks the fix.
+// In a harness that declares secrets, redaction can break either tool's references or continuations by
+// rewriting arguments even without truncation, or by expanding output past Pi's limit. See shell issue BIJAN-166.
 import { once } from "node:events";
 import { Worker } from "node:worker_threads";
 import { awaitWithContext, withAbortSignal, type Context } from "@earendil-works/chord/context";
@@ -238,20 +238,21 @@ const zoom = defineTool({
 				// A tag cannot exceed the number of characters in the chunk. Reserve room for both markers.
 				const frame = header + quote(budget.maxBytes, "");
 				// A prefix longer than the byte budget is enough to detect overflow without re-encoding the whole entry.
-				const chunk = boundOutput(text.slice(at, at + budget.maxBytes + 1), {
+				const { text: bounded, droppedBytes } = boundOutput(text.slice(at, at + budget.maxBytes + 1), {
 					...budget, maxBytes: budget.maxBytes - utf8ByteLength(frame), maxLines: budget.maxLines - 5,
 				});
-				// Keep the transcript verbatim, including multiline strings the shell needs to match for redaction.
-				const used = new Set(Array.from(chunk.text.matchAll(/\[\/transcript (\d+)\]/g), ([, tag]) => tag));
+				// A clipped UTF-8 round trip replaces lone surrogates. Use its length, not its text.
+				const chunk = text.slice(at, at + bounded.length);
+				const used = new Set(Array.from(chunk.matchAll(/\[\/transcript (\d+)\]/g), ([, tag]) => tag));
 				let tag = 0;
 				while (used.has(String(tag))) tag++;
-				const block = header + quote(tag, chunk.text);
-				if (body !== "" && (chunk.droppedBytes > 0 || boundOutput(body + block, budget).droppedBytes > 0)) {
+				const block = header + quote(tag, chunk);
+				if (body !== "" && (droppedBytes > 0 || boundOutput(body + block, budget).droppedBytes > 0)) {
 					// Reopen at the first unprinted entry, not at the next storage page's cursor.
 					return reply(body + footer + nextCall(id));
 				}
 				body += block;
-				if (chunk.droppedBytes > 0) return reply(body + footer + nextCall(id, at + chunk.text.length));
+				if (droppedBytes > 0) return reply(body + footer + nextCall(id, at + chunk.length));
 			}
 		}
 		if (body === "") throw new Error(`No messages with text on this branch at those IDs. ${discover}`);

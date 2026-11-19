@@ -87,8 +87,11 @@ it("pages raw text across a fork and Pi's stock compaction without gaps or paren
 		t.after(() => observation.detach());
 		const root = await shell.harness.root(context);
 		await root.configure({ compaction: { enabled: false, keepRecentTokens: 128 } }, context);
-		const openingText = `${"a short line\n".repeat(260)}${"😀".repeat(4000)}\nBranchMark archive`;
+		const openingText = `\ud800 ${"a short line\n".repeat(260)}${"😀".repeat(4000)}\nBranchMark archive`;
 		const opening = (await send(root, openingText)).entry;
+		const stored = (await root.entries({ minEntryId: opening, maxEntryId: opening }, 1, undefined, context)).items[0];
+		const message = stored?.model?.[0];
+		assert.ok(message?.role === "user" && message.content === openingText, "SQLite kept the original UTF-16");
 		// Scan both ways across full storage pages that have no printable messages.
 		await root.commit(async (tx) => {
 			for (let i = 0; i < 160; i++) await tx.appendEntry(root.id, { kind: "fixture.passive" });
@@ -149,7 +152,8 @@ it("pages raw text across a fork and Pi's stock compaction without gaps or paren
 			args = next;
 		}
 		assert.ok(pages > 1);
-		assert.equal(zoomed.get(opening), openingText, "reassemble the oversized multibyte entry exactly");
+		assert.equal(zoomed.get(opening)?.charCodeAt(0), 0xd800, "a clipped page must keep the lone surrogate");
+		assert.equal(zoomed.get(opening), openingText, "reassemble the oversized entry's UTF-16 exactly");
 		assert.deepEqual([...zoomed].filter(([id]) => matches.has(id)), [...matches]);
 		assert.equal(zoomed.get(boundary), boundaryText);
 		assert.equal(zoomed.get(forkOnly), forkText);

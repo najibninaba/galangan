@@ -255,8 +255,10 @@ assistant text, not thinking, images, tool results, or Pi's context markers.
 - `zoom({ entry })` opens one entry. `zoom({ range: { from, to } })` opens both endpoints inclusively, oldest first.
   Text between matching `[transcript N]` and `[/transcript N]` markers is quoted history. For long results, copy
   the continuation footer's arguments, including any `offset`, from outside the transcript blocks.
-  In a harness that declares secrets, redacting a short secret can push a `zoom` page over Pi's output limit,
-  cutting off its next-page line. [Shell issue BIJAN-166](https://linear.app/kapitan/issue/BIJAN-166) tracks the fix.
+
+In a harness that declares secrets, redaction can break references or continuations from either tool. It can rewrite
+call arguments even when the page fits, or expand a page past Pi's output limit and cut off its next-page line.
+[Shell issue BIJAN-166](https://linear.app/kapitan/issue/BIJAN-166) tracks the fix.
 
 The extension name and format key are both `galangan.memory`; spread `memoryFormats` from the first install to stamp
 format **1**. The stable tool names are `recall` and `zoom`; don't install a later extension with either name. This

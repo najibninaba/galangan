@@ -9,7 +9,7 @@ import { createModels, getSupportedThinkingLevels } from "@earendil-works/pi-ai/
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
-import { obj, str } from "@earendil-works/pi-schema";
+import { obj } from "@earendil-works/pi-schema";
 import { Effect } from "effect";
 import { tallyHarness } from "../examples/tally/tally.ts";
 import { chooseModel, chooseThinking, fauxModels, FAUX_MODEL, InvalidModel } from "../src/models.ts";
@@ -57,39 +57,6 @@ describe("shell", () => {
 				store: tempStore(t), create: true,
 			})));
 		assert.equal(answer, "output_probe: ☕");
-	});
-
-	it("withholds redacted text that would form a protected value across parts or stream chunks", async (t) => {
-		const env = { JOINED: "leftrigh", SEPARATOR: "X", MASK1: "*", MASK2: "?" };
-		const output = defineExtension({ name: "output-probe", tools: [defineTool({
-			name: "output_probe",
-			description: "Returns a redaction fixture",
-			parameters: obj({ mode: str() }),
-			outputLimits: { maxBytes: 9, maxLines: 1 },
-			execute: async ({ mode }, api) => {
-				if (mode === "stream") {
-					api.output("leftX");
-					api.output("righ");
-					return {};
-				}
-				const parts = mode === "split" ? ["leftX", "righ"] : ["leftXrigh"];
-				return { output: parts.map((text) => ({ type: "text", text })) };
-			},
-		})] });
-		const store = tempStore(t);
-		const answers = await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.gen(function* () {
-			return [yield* shell.ask('call output_probe {"mode":"one"}'),
-				yield* shell.ask('call output_probe {"mode":"split"}'),
-				yield* shell.ask('call output_probe {"mode":"stream"}')];
-		})), Shell.layer({
-			harness: { name: "output-test", secrets: Object.keys(env), extensions: [output] }, env,
-			choice: { models: fauxModels(), model: FAUX_MODEL }, store, create: true,
-		})));
-		assert.deepEqual(answers.map((answer) => answer.trimEnd()), [
-			"output_probe failed:", "output_probe failed:", "output_probe: left",
-		]);
-		for (const value of Object.values(env)) assert.ok(answers.every((answer) => !answer.includes(value)));
-		assert.ok(!readFileSync(store).includes(env.JOINED), "the synthesized value must never reach SQLite");
 	});
 
 	it("refuses a missing store unless asked to create it, and creates nothing", async (t) => {

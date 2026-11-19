@@ -1,5 +1,7 @@
 // Tools-only memory reads Pi's fork-visible raw transcript. It owns no documents, tasks or compaction hooks.
 // Frozen names: galangan.memory (also the format key), recall and zoom.
+// In a harness that declares secrets, redacting a short secret can push a zoom page over Pi's output limit
+// and cut off its next-page line. Shell issue BIJAN-166 tracks the fix.
 import { once } from "node:events";
 import { Worker } from "node:worker_threads";
 import { awaitWithContext, withAbortSignal, type Context } from "@earendil-works/chord/context";

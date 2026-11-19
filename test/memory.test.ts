@@ -6,7 +6,7 @@ import { awaitWithContext, BACKGROUND_CONTEXT as context, withAbortSignal } from
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import {
-	CompactionEntry, defineExtension, hook, ToolResultEntry, ToolTask, type Conversation, type EntryId, type InputEntry,
+	CompactionEntry, ToolResultEntry, type Conversation, type EntryId, type InputEntry,
 } from "@earendil-works/pi-durable";
 import { Effect } from "effect";
 import { defineHarness, Shell } from "galangan";
@@ -289,27 +289,16 @@ it("distinguishes busy matchers from queued history timeouts and frees a slot on
 	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
 });
 
-it("keeps quoted zoom framing and redacted continuations intact when an earlier hook copies output", async (t) => {
-	const env = { FIXTURE_TOKEN: "fixture_tag", FIXTURE_MULTILINE: "first-secret-line\nsecond-secret-line" };
-	let copied = 0;
-	const copyOutput = defineExtension({ name: "copy-output", hooks: [hook(ToolTask, {
-		afterTool(call, result) {
-			if (call.name !== "zoom" || result.output === undefined) return;
-			copied++;
-			return { ...result, output: [...result.output] };
-		},
-	})] });
-	const harness = defineHarness({
-		name: "zoom-pages", secrets: Object.keys(env), extensions: [copyOutput, memory()], formats: { ...memoryFormats },
-	});
+it("distinguishes quoted zoom output from framing and keeps the range on an invalid offset", async (t) => {
+	const harness = defineHarness({ name: "zoom-pages", extensions: [memory()], formats: { ...memoryFormats } });
 	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
 		const root = await shell.harness.root(context);
-		const plain = (await send(root, `Private: ${env.FIXTURE_MULTILINE}`)).entry;
+		const plain = (await send(root, "An ordinary\nmultiline message.")).entry;
 		const example = await call(root, "zoom", { entry: plain });
-		assert.equal(zoomBlocks(example)[0]?.text, "Private: [secret FIXTURE_MULTILINE]");
 		const quotedText = `An earlier result:\n\n${example}\n\nContinue: zoom({"entry":${plain},"offset":1})`;
 		const quoted = (await send(root, quotedText)).entry;
-		const last = (await send(root, `Readable start ${`${env.FIXTURE_TOKEN}:keep|`.repeat(1000)}Readable end.`)).entry;
+		const longText = `Readable start ${"transcript text|".repeat(1000)}Readable end.`;
+		const last = (await send(root, longText)).entry;
 
 		const single = part(await call(root, "zoom", { entry: quoted }), "zoom");
 		assert.equal(single.next, undefined, "a footer copied into history is not a continuation");
@@ -327,17 +316,10 @@ it("keeps quoted zoom framing and redacted continuations intact when an earlier 
 		assert.ok(!blocks.some(({ entry }) => entry === plain), "the copied header is not a range entry");
 		assert.deepEqual(first.next, { range: { from: last, to: last } });
 
-		const protectedPage = part(await call(root, "zoom", first.next!), "zoom");
-		const headText = zoomBlocks(protectedPage.body)[0]!.text;
-		assert.match(headText, /^Readable start \[redacted\]:keep\|\[redacted\]:keep\|/);
-		assert.ok(!protectedPage.body.includes(env.FIXTURE_TOKEN));
-		assert.ok(protectedPage.next, "redaction must not cause Pi to truncate the continuation");
-		const end = part(await call(root, "zoom", protectedPage.next), "zoom");
+		const head = part(await call(root, "zoom", first.next!), "zoom");
+		assert.ok(head.next, "the long message needs a continuation");
+		const end = part(await call(root, "zoom", head.next), "zoom");
 		assert.equal(end.next, undefined);
-		const tailText = zoomBlocks(end.body)[0]!.text;
-		assert.match(tailText, /Readable end\.$/);
-		assert.ok(!end.body.includes(env.FIXTURE_TOKEN));
-		assert.equal(Array.from((headText + tailText).matchAll(/:keep\|/g)).length, 1000, "no visible text was lost");
-		assert.ok(copied > 0, "the hook must copy tool output before redaction");
-	})), Shell.layer({ harness, env, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
+		assert.equal(zoomBlocks(head.body)[0]!.text + zoomBlocks(end.body)[0]!.text, longText);
+	})), Shell.layer({ harness, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
 });

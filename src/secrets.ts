@@ -6,15 +6,12 @@ import {
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import type { JsonValue } from "@earendil-works/chord/json";
-import { utf8ByteLength } from "@earendil-works/chord/output";
 import type { HarnessSpec } from "./harness.ts";
 
 export type Env = { readonly [name: string]: string | undefined };
 
 export const missingSecrets = (spec: HarnessSpec, env: Env): string[] =>
 	(spec.secrets ?? []).filter((name) => (env[name] ?? "") === "");
-
-const containsSecret = (text: string, values: readonly string[]) => values.some((value) => text.includes(value));
 
 export function secretProtection(spec: HarnessSpec, env: Env) {
 	const marks = new Map<string, string>();
@@ -26,20 +23,12 @@ export function secretProtection(spec: HarnessSpec, env: Env) {
 	if (values.length === 0) return undefined;
 
 	// A named marker can itself contain a short secret or a credential that matches a variable name.
-	const safeMark = (mark: string) => !containsSecret(mark, values);
+	const safeMark = (mark: string) => values.every((value) => !mark.includes(value));
 	const fallback = ["[redacted]", "█", ""].find(safeMark)!;
 	for (const [value, mark] of marks) if (!safeMark(mark)) marks.set(value, fallback);
 
 	const pattern = new RegExp(values.map((value) => RegExp.escape(value)).join("|"), "g");
-	const redact = (text: string): string => {
-		const clean = text.replace(pattern, (value) => marks.get(value)!);
-		return containsSecret(clean, values) ? "" : clean;
-	};
-	// Tools can budget a page without knowing the shell's secrets or which afterTool hooks will run.
-	const outputMarks = new Map([...marks].map(([value, mark]) => [value,
-		[mark, "[redacted]", "*", "?", ""].find((candidate) => !candidate.includes("\n") &&
-			utf8ByteLength(candidate) <= utf8ByteLength(value) && safeMark(candidate))!,
-	]));
+	const redact = (text: string): string => text.replace(pattern, (value) => marks.get(value)!);
 	const json = (value: JsonValue): JsonValue => {
 		if (typeof value === "string") return redact(value);
 		if (Array.isArray(value)) return value.map(json);
@@ -54,22 +43,15 @@ export function secretProtection(spec: HarnessSpec, env: Env) {
 		...(value.code === undefined ? {} : { code: redact(value.code) }),
 	});
 	const afterTool = (_call: unknown, result: ToolExecutionResult): ToolExecutionResult => {
-		const original = result.output;
-		const output = original?.map((part) => {
+		const output = result.output?.map((part) => {
 			if (part.type !== "text") return part;
-			const text = part.text.replace(pattern, (value) => outputMarks.get(value)!);
+			const text = redact(part.text);
 			return text === part.text ? part : { ...part, text };
 		});
-		const text = (parts: ToolExecutionResult["output"]) =>
-			parts?.map((part) => part.type === "text" ? part.text : "").join("") ?? "";
-		const rendered = text(output);
-		// Pi bounds the joined text. Replacements can create a secret alongside adjacent text or across parts.
-		const withhold = containsSecret(rendered, values) || utf8ByteLength(rendered) > utf8ByteLength(text(original));
 		return {
 			...result,
 			// Pi uses the array identity to decide whether to retain its progress truncation diagnostic.
-			...(withhold ? { output: output?.filter((part) => part.type !== "text"), isError: true }
-				: output?.some((part, index) => part !== original?.[index]) ? { output } : {}),
+			...(output?.some((part, index) => part !== result.output?.[index]) ? { output } : {}),
 			...(result.structuredOutput === undefined ? {} : { structuredOutput: json(result.structuredOutput) }),
 			...(result.details === undefined ? {} : { details: json(result.details) }),
 			...(result.diagnostics === undefined ? {} : { diagnostics: result.diagnostics.map(diagnostic) }),
@@ -84,7 +66,7 @@ export function secretProtection(spec: HarnessSpec, env: Env) {
 		execute: async (args, api, context) => {
 			// An extension wrapper may call the tool it wraps with the same protected API.
 			if (guardedOutputs.has(api.output)) return tool.execute(args, api, context);
-			const stream = redactStream(values, outputMarks, api.output);
+			const stream = redactStream(values, marks, api.output);
 			guardedOutputs.add(stream.output);
 			// Copy own properties for harness wrappers that spread the API, preserving Pi's live getters.
 			const protectedApi = Object.defineProperties({}, Object.getOwnPropertyDescriptors(api)) as ToolExecutionApi;
@@ -126,13 +108,9 @@ export function secretProtection(spec: HarnessSpec, env: Env) {
 // when a string interrupts bytes or a stream starts with a UTF-8 BOM.
 function redactStream(values: readonly string[], marks: ReadonlyMap<string, string>, emit: (text: string) => void) {
 	const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
-	const suffixLength = values[0]!.length - 1;
 	let pending = "";
 	let started = false;
-	let withheld = false;
-	let suffix = "";
 	function scan(text: string, state: "open" | "complete" | "interrupted" = "open") {
-		if (withheld) return;
 		pending += text;
 		let index = 0;
 		let safe = "";
@@ -144,7 +122,9 @@ function redactStream(values: readonly string[], marks: ReadonlyMap<string, stri
 				if (partial !== undefined) {
 					if (state === "open") break;
 					if (state === "interrupted") {
-						// An incomplete value may be shorter than its marker. Omit it on interruption.
+						// A shorter value may match the start of a held, longer prefix.
+						const value = match?.length === suffix.length ? match : partial;
+						safe += marks.get(value)!;
 						index = pending.length;
 						break;
 					}
@@ -158,16 +138,7 @@ function redactStream(values: readonly string[], marks: ReadonlyMap<string, stri
 			}
 		}
 		pending = pending.slice(index);
-		if (safe === "") return;
-		// A new match can start in previously emitted text and end in this chunk. Do not emit either the
-		// completion or further chunks that could join across the withheld section.
-		const joined = suffix + safe;
-		if (containsSecret(joined, values)) {
-			withheld = true;
-			return;
-		}
-		suffix = suffixLength === 0 ? "" : joined.slice(-suffixLength);
-		emit(safe);
+		if (safe !== "") emit(safe);
 	}
 	return {
 		output(chunk: string | Uint8Array, skipped?: Parameters<ToolExecutionApi["output"]>[1]) {

@@ -18,8 +18,8 @@ export type HarnessSpec = {
 	readonly formats?: { readonly [extension: string]: number };
 	/**
 	 * Environment variables the harness's tools need, such as an API token; tools still read them from the
-	 * environment. `runCli` exits 78 at startup when one is unset or empty. The shell masks exact values before Pi
-	 * stores tool results. Output text uses `[secret NAME]` only when it fits without growing the text.
+	 * environment. `runCli` exits 78 at startup when one is unset or empty, and the shell replaces each value with
+	 * `[secret NAME]` in every tool result before Pi stores it (src/secrets.ts).
 	 */
 	readonly secrets?: readonly string[];
 };

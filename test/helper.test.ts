@@ -169,8 +169,8 @@ it("gives a child only explicitly selected extensions, independent of the parent
 		fauxAssistantMessage(fauxToolCall("delegate", { task: "count one cup" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage(fauxToolCall("tally", { label: "cups" }), { stopReason: "toolUse" }),
 		(transcript) => {
-			// The child's own tool result uses a marker that fits the short value's byte budget.
-			assert.match(JSON.stringify(transcript.messages.at(-1)), /\* = 1/);
+			// The child's own tool result, committed in the child conversation.
+			assert.match(JSON.stringify(transcript.messages.at(-1)), /\[secret HELPER_TEST_SECRET\] = 1/);
 			return fauxAssistantMessage("one cup finding");
 		},
 		fauxAssistantMessage("one cup synthesis"),

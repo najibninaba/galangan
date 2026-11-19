@@ -1,7 +1,6 @@
 // Tools-only memory reads Pi's fork-visible raw transcript. It owns no documents, tasks or compaction hooks.
 // Frozen names: galangan.memory (also the format key), recall and zoom.
-// In a harness that declares secrets, redaction can break either tool's references or continuations by
-// rewriting arguments even without truncation, or by expanding output past Pi's limit. See shell issue BIJAN-166.
+// Size pages with their final JSON spelling. Never let text redaction turn a reference into a different call.
 import { once } from "node:events";
 import { Worker } from "node:worker_threads";
 import { awaitWithContext, withAbortSignal, type Context } from "@earendil-works/chord/context";
@@ -13,6 +12,7 @@ import {
 	type ToolExecutionApi, type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import { int, obj, opt, str } from "@earendil-works/pi-schema";
+import { toolTextPolicy, type ToolTextApi } from "../../tool-output.ts";
 
 const name = "galangan.memory";
 export const memoryFormats = Object.freeze({ [name]: 1 } as const);
@@ -26,7 +26,6 @@ const recallWorkerLimit = 2;
 let activeRecallWorkers = 0;
 const outputLimits = { maxBytes: 12_000, maxLines: 240, retain: "head" } as const;
 const entryId = int({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
-const discover = `Try recall({"regex":"keyword"}) with a word from the message.`;
 
 async function* entryPages(
 	api: ToolExecutionApi, context: Context, bounds: Omit<EntryQuery, "conversationId">, remaining = Infinity,
@@ -78,23 +77,64 @@ function messageText(entry: EntryRecord, limit = Infinity): MessageText | typeof
 	return texts.length === 0 ? undefined : { id: entry.id, role: [...roles].join("/"), text: texts.join("") };
 }
 
-function reply(text: string): ToolExecutionResult {
-	return { output: [{ type: "text", text }] };
+type CallArgs = { [key: string]: string | number | CallArgs | undefined };
+
+function pageOutput(api: ToolTextApi) {
+	const policy = api[toolTextPolicy];
+	let warned = false;
+	function visible(text: string): boolean {
+		if (!policy?.containsSecret(text)) return true;
+		if (!warned) {
+			warned = true;
+			api.diagnostic({ severity: "warn", code: "memory_framing_withheld",
+				message: "Part of the memory page, including any affected calls, could not be shown safely." });
+		}
+		return false;
+	}
+	function keySpelling(key: string): string {
+		const plain = JSON.stringify(key);
+		if (!policy?.containsSecret(plain)) return plain;
+		// Escape public schema keys, not data (especially a user-supplied regex). The result must parse to the same key.
+		const units = Array.from(key, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+		for (let i = 0; i < key.length; i++) {
+			const escaped = `"${key.slice(0, i)}${units[i]}${key.slice(i + 1)}"`;
+			if (!policy.containsSecret(escaped)) return escaped;
+		}
+		return `"${units.join("")}"`;
+	}
+	function argsJson(args: CallArgs): string {
+		return `{${Object.entries(args).flatMap(([key, value]) => value === undefined ? [] :
+			`${keySpelling(key)}:${typeof value === "object" ? argsJson(value) : JSON.stringify(value)}`).join(",")}}`;
+	}
+	const call = (tool: "recall" | "zoom", args: CallArgs) => `${tool}(${argsJson(args)})`;
+	return {
+		call,
+		redact: (text: string) => policy?.redact(text) ?? text,
+		show: (reference: string, argument?: string) =>
+			(argument === undefined || visible(argument)) && visible(reference) ? reference : "",
+		discover: () => {
+			const example = call("recall", { regex: "keyword" });
+			return visible(example) ? `Try ${example} with a word from the message.` : "Try another search pattern.";
+		},
+		reply(parts: readonly string[]): ToolExecutionResult {
+			// Check joins as well. Never let the final scrub rewrite a printed call into different arguments.
+			let text = "";
+			for (const part of parts) if (visible(text + part)) text += part;
+			return { output: [{ type: "text", text: text.trimEnd() }] };
+		},
+	};
 }
 
-function zoomRef(entry: number) {
-	return `zoom(${JSON.stringify({ entry })})`;
-}
-
-function recallLine({ id, role, text }: MessageText, match: number) {
+function recallLine({ id, role, text }: MessageText, match: number, page: ReturnType<typeof pageOutput>) {
 	let start = Math.max(0, match - 64);
 	if ((text.codePointAt(start - 1) ?? 0) > 0xffff) start--;
 	let end = match + 640;
 	if ((text.codePointAt(end - 1) ?? 0) > 0xffff) end++;
-	const excerpt = boundOutput(text.slice(start, end).replace(/\s+/gu, " "), {
+	const excerpt = boundOutput(page.redact(text.slice(start, end)).replace(/\s+/gu, " "), {
 		maxBytes: 640, maxLines: 1, retain: "head",
 	});
-	return `${zoomRef(id)} | ${role} | ${start > 0 ? "…" : ""}${excerpt.text}` +
+	return `${page.show(page.call("zoom", { entry: id }))} | ${page.redact(role)} | ` +
+		`${start > 0 ? "…" : ""}${page.redact(excerpt.text)}` +
 		`${end < text.length || excerpt.droppedBytes > 0 ? "…" : ""}\n`;
 }
 
@@ -108,14 +148,16 @@ const recall = defineTool({
 	replay: "safe",
 	outputLimits,
 	execute: async ({ regex, before }, api, context) => {
-		if (regex.length < 1 || regex.length > 256) throw new Error(`Use a regex of 1–256 characters. ${discover}`);
+		const output = pageOutput(api);
+		if (regex.length < 1 || regex.length > 256) throw new Error(`Use a regex of 1–256 characters. ${output.discover()}`);
 		try {
 			new RegExp(regex, "iu");
 		} catch {
-			throw new Error(`Invalid regex. ${discover}`);
+			throw new Error(`Invalid regex. ${output.discover()}`);
 		}
-		const continuation = (id: number) => `Continue: recall(${JSON.stringify({ regex, before: id })})`;
+		const continuation = (id: number) => `Continue: ${output.call("recall", { regex, before: id })}`;
 		const budget = outputLimits.maxBytes - utf8ByteLength(continuation(Number.MAX_SAFE_INTEGER));
+		const footer = (id: number) => output.show(continuation(id), regex);
 		const rows: string[] = [];
 		let bytes = 0;
 		let last: EntryId | undefined;
@@ -136,7 +178,8 @@ const recall = defineTool({
 					const entry = messageText(raw, recallTextLimit);
 					let line: string | undefined;
 					if (entry === oversized) {
-						line = `Not searched (entry too large): ${zoomRef(id)}\n`;
+						line = `${output.redact("Not searched (entry too large): ")}` +
+							`${output.show(output.call("zoom", { entry: id }))}\n`;
 					} else if (entry !== undefined) {
 						if (worker === undefined) {
 							if (activeRecallWorkers >= recallWorkerLimit) {
@@ -158,13 +201,13 @@ const recall = defineTool({
 						waitingForMatch = true;
 						const [match] = await response as [number | null];
 						waitingForMatch = false;
-						if (match !== null) line = recallLine(entry, match);
+						if (match !== null) line = recallLine(entry, match, output);
 					}
 					if (line !== undefined) {
 						const size = utf8ByteLength(line);
 						if (last !== undefined && (bytes + size > budget || rows.length === outputLimits.maxLines - 1)) {
 							// Unprinted matches and notices belong on the next result page.
-							return reply(rows.join("") + continuation(last));
+							return output.reply([...rows, footer(last)]);
 						}
 						rows.push(line);
 						bytes += size;
@@ -176,7 +219,7 @@ const recall = defineTool({
 		} catch (error) {
 			context.abortSignal?.throwIfAborted();
 			if (deadline.aborted && signal.reason === deadline.reason) {
-				throw new Error(waitingForMatch ? `Regex match timed out. Try a simpler regex. ${discover}`
+				throw new Error(waitingForMatch ? `Regex match timed out. Try a simpler regex. ${output.discover()}`
 					: "Recall timed out waiting for history. Retry this call with the same arguments.");
 			}
 			throw error;
@@ -187,9 +230,10 @@ const recall = defineTool({
 			}
 		}
 		if (more && last !== undefined) {
-			return reply((rows.length === 0 ? "No matches on this page.\n" : rows.join("")) + continuation(last));
+			const body = rows.length === 0 ? [`${output.redact("No matches on this page.")}\n`] : rows;
+			return output.reply([...body, footer(last)]);
 		}
-		return reply(rows.length > 0 ? rows.join("").trimEnd() : `No matching messages. ${discover}`);
+		return output.reply(rows.length > 0 ? rows : [output.redact("No matching messages. ") + output.discover()]);
 	},
 });
 
@@ -207,14 +251,15 @@ const zoom = defineTool({
 	replay: "safe",
 	outputLimits,
 	execute: async ({ entry, range, offset = 0 }, api, context) => {
+		const output = pageOutput(api);
 		const from = entry ?? range?.from;
 		const to = entry ?? range?.to;
 		if (from === undefined || to === undefined || (entry !== undefined && range !== undefined) || from > to) {
-			throw new Error(`Give either one entry or a range with from <= to. ${discover}`);
+			throw new Error(`Give either one entry or a range with from <= to. ${output.discover()}`);
 		}
-		const nextCall = (id: number, at?: number) => `zoom(${JSON.stringify({
+		const nextCall = (id: number, at?: number) => output.call("zoom", {
 			...(range === undefined ? { entry: id } : { range: { from: id, to } }), offset: at,
-		})})`;
+		});
 		const footer = "Continue: ";
 		const longestCall = nextCall(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
 		const budget = {
@@ -223,6 +268,7 @@ const zoom = defineTool({
 			maxLines: outputLimits.maxLines - 1,
 		};
 		const quote = (tag: number, text: string) => `[transcript ${tag}]\n${text}\n[/transcript ${tag}]\n\n`;
+		const blocks: string[] = [];
 		let body = "";
 		for await (const page of entryPages(api, context, {
 			order: "ascending", minEntryId: from as EntryId, maxEntryId: to as EntryId,
@@ -233,9 +279,9 @@ const zoom = defineTool({
 				const { id, role, text } = message;
 				const at = body === "" ? offset : 0;
 				if (at > 0 && (id !== from || at >= text.length || (text.codePointAt(at - 1) ?? 0) > 0xffff)) {
-					throw new Error(`Invalid continuation offset. Start again with ${nextCall(from)}.`);
+					throw new Error(`Invalid continuation offset.${output.show(` Start again with ${nextCall(from)}.`)}`);
 				}
-				const header = `${zoomRef(id)} | ${role}\n`;
+				const header = `${output.show(output.call("zoom", { entry: id }))} | ${output.redact(role)}\n`;
 				// A tag cannot exceed the number of characters in the chunk. Reserve room for both markers.
 				const frame = header + quote(budget.maxBytes, "");
 				// A prefix longer than the byte budget is enough to detect overflow without re-encoding the whole entry.
@@ -244,21 +290,24 @@ const zoom = defineTool({
 				});
 				// A clipped UTF-8 round trip replaces lone surrogates. Use its length, not its text.
 				const chunk = text.slice(at, at + bounded.length);
+				// Select framing after redaction, but continue at the original UTF-16 offset.
+				const quoted = output.redact(chunk);
 				// Pi's Responses adapter removes lone surrogates. This can create ASCII markers but not erase them.
-				const used = new Set(Array.from(sanitizeSurrogates(chunk).matchAll(/\[\/transcript (\d+)\]/g), ([, tag]) => tag));
+				const used = new Set(Array.from(sanitizeSurrogates(quoted).matchAll(/\[\/transcript (\d+)\]/g), ([, tag]) => tag));
 				let tag = 0;
 				while (used.has(String(tag))) tag++;
-				const block = header + quote(tag, chunk);
+				const block = header + quote(tag, quoted);
 				if (body !== "" && (droppedBytes > 0 || boundOutput(body + block, budget).droppedBytes > 0)) {
 					// Reopen at the first unprinted entry, not at the next storage page's cursor.
-					return reply(body + footer + nextCall(id));
+					return output.reply([...blocks, footer + nextCall(id)]);
 				}
+				blocks.push(block);
 				body += block;
-				if (droppedBytes > 0) return reply(body + footer + nextCall(id, at + chunk.length));
+				if (droppedBytes > 0) return output.reply([...blocks, footer + nextCall(id, at + chunk.length)]);
 			}
 		}
-		if (body === "") throw new Error(`No messages with text on this branch at those IDs. ${discover}`);
-		return reply(body.slice(0, -2));
+		if (body === "") throw new Error(`No messages with text on this branch at those IDs. ${output.discover()}`);
+		return output.reply(blocks);
 	},
 });
 

@@ -7,7 +7,7 @@ import { it, type TestContext } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { AssistantEntry, defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { AssistantEntry, defineExtension, defineTool, ToolResultEntry } from "@earendil-works/pi-durable";
 import { obj } from "@earendil-works/pi-schema";
 import { Effect } from "effect";
 import { defineHarness } from "../src/harness.ts";
@@ -168,11 +168,7 @@ it("gives a child only explicitly selected extensions, independent of the parent
 	faux.setResponses([
 		fauxAssistantMessage(fauxToolCall("delegate", { task: "count one cup" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage(fauxToolCall("tally", { label: "cups" }), { stopReason: "toolUse" }),
-		(transcript) => {
-			// The child's own tool result, committed in the child conversation.
-			assert.match(JSON.stringify(transcript.messages.at(-1)), /\[secret HELPER_TEST_SECRET\] = 1/);
-			return fauxAssistantMessage("one cup finding");
-		},
+		fauxAssistantMessage("one cup finding"),
 		fauxAssistantMessage("one cup synthesis"),
 	]);
 	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
@@ -185,6 +181,10 @@ it("gives a child only explicitly selected extensions, independent of the parent
 		const agent = await child.agent(context);
 		assert.deepEqual(agent.extensions.map((extension) => extension.name), ["tally"]);
 		assert.deepEqual(agent.tools.map((tool) => tool.name), ["tally"]);
+		// Assert outside the model: faux can turn an assertion in its response factory into a model error.
+		const result = (await child.entries({}, 10, undefined, context)).items.find(ToolResultEntry.is)?.model?.[0];
+		assert.ok(result?.role === "toolResult" && result.toolName === "tally" && !result.isError);
+		assert.deepEqual(result.content, [{ type: "text", text: "* = 1" }]);
 	})), layer()));
 });
 

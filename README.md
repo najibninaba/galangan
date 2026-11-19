@@ -176,11 +176,19 @@ export const myHarness = defineHarness({ name: "mine", secrets: ["TODOIST_API_TO
 tool fails only when the model calls it. Galangan wraps tools in their installed extensions, so redaction follows
 the tools through helper recovery, forks and conversation configuration. The wrapper redacts live output, details
 and diagnostics before Pi receives them. A final tool hook redacts exact values in results, including diagnostic
-codes and handoffs. A stream holds a possible secret prefix until it can match it and masks a remaining prefix
-when the tool throws or is interrupted. Returning a result preserves incomplete prefixes, including when the
-result reports an error. With redaction active, Pi bounds output after redaction and callers receive no source-side
-tail window. A tool reading retained output sees the text accepted by Pi so far. A structured result built from
-that snapshot can omit a trailing prefix that appears in the final streamed output.
+codes and handoffs. Masking does not add UTF-8 bytes or lines to visible tool text: it uses `[secret NAME]` when it fits
+and a shorter marker such as `*` otherwise. Diagnostics and other non-output fields still prefer the named marker.
+The shell strips terminal escapes and controls before masking live text, including across chunk boundaries. It also
+checks the joins used in stored diagnostic text and nested error summaries, and rechecks formatted Responses tool
+output before sending it. If masking cannot be done safely, the shell withholds text without changing the tool's
+success or error status and adds a warning outside the output budget when Pi's diagnostic framing allows it.
+Pi 1.5.2 can synthesize additional diagnostics after the result hook; the shell cannot change those before Pi stores them.
+
+A stream holds a possible secret prefix until it can match it and masks or withholds a remaining prefix when the
+tool throws or is interrupted. Returning a result preserves incomplete prefixes, including when it reports an error.
+With redaction active, Pi applies stream limits to the normalized, masked text, not to the original bytes, and callers
+receive no source-side tail window. A tool reading retained output sees the text accepted by Pi so far, which can omit
+a prefix still held by the redactor.
 
 Tools and hooks must keep secrets out of arguments (including values added by hooks and nested calls), their own
 commits and memos, prompts, and spill files. Use secret-free payloads for schema-validated fields because a
@@ -256,9 +264,10 @@ assistant text, not thinking, images, tool results, or Pi's context markers.
   Text between matching `[transcript N]` and `[/transcript N]` markers is quoted history. For long results, copy
   the continuation footer's arguments, including any `offset`, from outside the transcript blocks.
 
-In a harness that declares secrets, redaction can break references or continuations from either tool. It can rewrite
-call arguments even when the page fits, or expand a page past Pi's output limit and cut off its next-page line.
-[Shell issue BIJAN-166](https://linear.app/kapitan/issue/BIJAN-166) tracks the fix.
+Both tools size their pages so redaction cannot cut off a next-page line. In a harness that declares secrets, JSON
+keys in printed calls may use Unicode escapes; they decode to the same arguments. If a call cannot be displayed
+safely (for example, its search pattern contains a credential), the tool omits it and warns rather than printing a
+call with altered arguments.
 
 The extension name and format key are both `galangan.memory`; spread `memoryFormats` from the first install to stamp
 format **1**. The stable tool names are `recall` and `zoom`; don't install a later extension with either name. This

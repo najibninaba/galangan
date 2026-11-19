@@ -95,7 +95,8 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 	// Made-up values for the harness's own secrets and one of the suite's, so the leak case runs for every harness.
 	const prefixName = "GALANGAN_CONFORMANCE_PREFIX";
 	const secrets = [...(spec.secrets ?? []), "GALANGAN_CONFORMANCE_SECRET", prefixName];
-	const env = Object.fromEntries(secrets.map((name) => [name, `s${randomUUID().replaceAll("-", "")}`]));
+	const env = Object.fromEntries(secrets.map((name) => [name,
+		`s${randomUUID().replaceAll("-", "")}${"z".repeat(name.length)}`]));
 	const firstValue = env[secrets[0]!]!;
 	env[prefixName] = firstValue.slice(0, 12);
 	const partial = firstValue.slice(0, -1);
@@ -253,13 +254,13 @@ export function conformance(spec: HarnessSpec, options: ConformanceOptions = {})
 
 		it("keeps secret values out of the store, also when a tool's error quotes them", async (t) => {
 			const path = store(t);
-			const marks = secrets.map((name) => `[secret ${name}]`).join(" ");
+			const marks = secrets.slice(0, -1).map((name) => `[secret ${name}]`).join(" ");
 			const [sent, threw = ""] = await ask(path, ['call galangan_probe_secret {"how":"return"}'],
 				['call galangan_probe_secret {"how":"throw"}']);
-			// The model still learns which secret was involved.
-			assert.ok(sent?.startsWith(`galangan_probe_secret: sent ${marks}`));
+			// Result text keeps names only when they fit. Diagnostics still have room for the name of the shortest value.
+			assert.ok(sent?.startsWith(`galangan_probe_secret: sent ${marks} [redacted]`));
 			assert.match(threw, /^galangan_probe_secret failed: /);
-			assert.ok(threw.includes(`with ${marks} failed`), threw);
+			assert.ok(threw.includes(`with ${marks} [secret ${prefixName}] failed`), threw);
 			// The file itself, not what Pi reads back: a value anywhere in it, a page or the WAL, is a leak.
 			const bytes = [path, `${path}-wal`].filter((file) => existsSync(file)).map((file) => readFileSync(file).toString("latin1"));
 			for (const [name, value] of Object.entries(env)) {

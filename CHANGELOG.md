@@ -3,6 +3,15 @@
 Each release says whether it migrates the store and gives a `Migration:` line for every change harness code must
 make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for release lines and how to upgrade.
 
+## Unreleased
+
+- Tool output redaction no longer increases the byte or line count. Short values may appear as `*` rather than
+  `[secret NAME]`; diagnostics still prefer named markers. A warning distinguishes withheld output from execution failure.
+- `recall` and `zoom` size pages with callable references and continuations, escaping public JSON keys when they
+  collide with a declared value. A call that cannot be displayed safely is omitted with a warning. (BIJAN-166)
+
+Store: no schema or kit format change. Migration: none required.
+
 ## 0.2.6 - 2026-11-19
 
 Opt-in transcript memory (BIJAN-139). Still on Pi Durable 1.5.2 and Effect 4.1.4.

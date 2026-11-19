@@ -47,6 +47,71 @@ function zoomBlocks(body: string): { entry: EntryId; role: string; text: string 
 	return blocks.map(([, args, role, _tag, text]) => ({ entry: JSON.parse(args!).entry, role: role!, text: text! }));
 }
 
+it("follows recall references and both tools' continuations when short secrets match text and JSON keys", async (t) => {
+	const env = { FIXTURE_TOKEN: "q7!", ENTRY_KEY: "entry", REGEX_KEY: "regex", BEFORE_KEY: "before", OFFSET_KEY: "offset" };
+	const harness = defineHarness({ name: "memory-redaction", extensions: [memory()], formats: { ...memoryFormats },
+		secrets: Object.keys(env) });
+	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
+		const root = await shell.harness.root(context);
+		await root.configure({ compaction: { enabled: false } }, context);
+		const text = `HIT long ${`${env.FIXTURE_TOKEN}:keep|`.repeat(1_600)}the end`;
+		const long = (await send(root, text)).entry;
+		const matches = await root.commit(async (tx) => {
+			const ids: EntryId[] = [];
+			for (let i = 0; i < 24; i++) {
+				const entry = await tx.appendEntry(root.id, { kind: "fixture.input", model: [{
+					role: "user", timestamp: 0, content: `HIT ${i} ${env.FIXTURE_TOKEN} ${"a".repeat(640)}`,
+				}] });
+				ids.push(entry.id);
+			}
+			return ids;
+		}, context);
+		const check = (output: string) => {
+			assert.ok(Buffer.byteLength(output) <= 12_000);
+			for (const value of Object.values(env)) assert.ok(!output.includes(value), `leaked ${value}`);
+			return output;
+		};
+		let args: object | undefined = { regex: "^HIT" };
+		let pages = 0;
+		const refs: { entry: EntryId }[] = [];
+		while (args !== undefined) {
+			assert.ok(++pages < 4, "recall paging must terminate");
+			const { body, next } = part(check(await call(root, "recall", args)), "recall");
+			for (const [, json] of body.matchAll(/^zoom\((\{.*?\})\) \|/gm)) refs.push(JSON.parse(json!));
+			if (next !== undefined) assert.deepEqual(next, { regex: "^HIT", before: refs.at(-1)!.entry });
+			args = next;
+		}
+		assert.equal(pages, 2);
+		// The faux model also echoes the first user message, but that echo starts with "ack:" and does not match ^HIT.
+		assert.deepEqual(refs.map(({ entry }) => entry), [...matches.reverse(), long]);
+		const first = part(check(await call(root, "zoom", refs.at(-1)!)), "zoom");
+		assert.ok(first.next, "zoom must keep a callable continuation");
+		const second = part(check(await call(root, "zoom", first.next)), "zoom");
+		assert.equal(second.next, undefined);
+		const chunks = [...zoomBlocks(first.body), ...zoomBlocks(second.body)];
+		assert.deepEqual(chunks.map(({ entry }) => entry), [long, long]);
+		const combined = chunks.map(({ text }) => text).join("");
+		assert.equal(combined.match(/:keep\|/g)?.length, 1_600, "the original offset must not skip or repeat text");
+		assert.match(combined, /^HIT long \*:keep\|.*the end$/s);
+	})), Shell.layer({ harness, env, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
+});
+
+it("warns rather than serializing a secret regex into a recall continuation", async (t) => {
+	const env = { FIXTURE_REGEX: "query\ncredential" };
+	const harness = defineHarness({ name: "memory-redaction", extensions: [memory()], formats: { ...memoryFormats },
+		secrets: Object.keys(env) });
+	await Effect.runPromise(Effect.provide(Shell.use((shell) => Effect.promise(async () => {
+		const root = await shell.harness.root(context);
+		await root.commit(async (tx) => {
+			for (let i = 0; i < 260; i++) await tx.appendEntry(root.id, { kind: "fixture.passive" });
+		}, context);
+		const result = await call(root, "recall", { regex: env.FIXTURE_REGEX });
+		assert.match(result, /^No matches on this page\./);
+		assert.match(result, /\[warn\].*could not be shown safely/);
+		assert.doesNotMatch(result, /Continue:|query\\ncredential/);
+	})), Shell.layer({ harness, env, store: tempStore(t), create: true, choice: { models: fauxModels(), model: FAUX_MODEL } })));
+});
+
 it("pages raw text across a fork and Pi's stock compaction without gaps or parent-only entries", async (t) => {
 	const store = tempStore(t);
 	const faux = fauxProvider();

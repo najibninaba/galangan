@@ -18,7 +18,7 @@
     "@earendil-works/pi-durable": "1.5.2",
     "@earendil-works/pi-schema": "1.5.2",
     "effect": "4.1.4",
-    "galangan": "0.2.6"
+    "galangan": "0.2.7"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

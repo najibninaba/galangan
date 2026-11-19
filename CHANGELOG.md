@@ -3,7 +3,12 @@
 Each release says whether it migrates the store and gives a `Migration:` line for every change harness code must
 make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for release lines and how to upgrade.
 
-## Unreleased
+## 0.2.7 - 2026-11-19
+
+Tool redaction stays within output budgets (BIJAN-166). Still on Pi Durable 1.5.2 and Effect 4.1.4.
+
+Store: no Pi schema or kit format change. The first open of a store stamped by 0.2.6 backs it up to
+`<store>.<UTC time>.bak` and restamps it. To roll back, restore the backup before opening it with 0.2.6.
 
 - Tool output redaction no longer increases the byte or line count. Short values may appear as `*` rather than
   `[secret NAME]`; diagnostics still prefer named markers. A warning distinguishes withheld output from execution failure.
@@ -13,7 +18,7 @@ make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for r
   replay after protected extensions are deselected bypass the Responses payload guard.
   [BIJAN-167](https://linear.app/kapitan/issue/BIJAN-167) tracks the Pi hook.
 
-Store: no schema or kit format change. Migration: none required.
+Migration: none required. Upgrade with `npm install --save-exact galangan@0.2.7`.
 
 ## 0.2.6 - 2026-11-19
 

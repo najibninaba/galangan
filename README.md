@@ -135,7 +135,7 @@ dependencies, so a harness gets the same copies the shell runs on.
 A harness repo installs Galangan from npm at an exact release, plus the exact peers from [Pins](#pins):
 
 ```sh
-npm install --save-exact galangan@0.2.6 \
+npm install --save-exact galangan@0.2.7 \
   @earendil-works/pi-durable@1.5.2 @earendil-works/pi-ai@1.5.2 @earendil-works/chord@1.5.2 \
   @earendil-works/pi-schema@1.5.2 effect@4.1.4
 npm install --save-dev @types/node   # galangan/testing's types use node:test

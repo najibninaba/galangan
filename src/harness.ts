@@ -18,8 +18,10 @@ export type HarnessSpec = {
 	readonly formats?: { readonly [extension: string]: number };
 	/**
 	 * Environment variables the harness's tools need, such as an API token; tools still read them from the
-	 * environment. `runCli` exits 78 at startup when one is unset or empty. The shell redacts exact values before
-	 * Pi stores them, using `[secret NAME]` or a shorter marker that fits the affected tool output (src/secrets.ts).
+	 * environment. `runCli` exits 78 at startup when one is unset or empty. The shell masks exact values in
+	 * protected tool output and results through Pi's `afterTool` hook, using `[secret NAME]` or a shorter marker
+	 * that fits. Pi stores diagnostics added after that hook unredacted.
+	 * See [Build a harness](https://github.com/najibninaba/galangan#build-a-harness) for compaction and replay limits.
 	 */
 	readonly secrets?: readonly string[];
 };

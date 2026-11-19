@@ -9,6 +9,9 @@ make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for r
   `[secret NAME]`; diagnostics still prefer named markers. A warning distinguishes withheld output from execution failure.
 - `recall` and `zoom` size pages with callable references and continuations, escaping public JSON keys when they
   collide with a declared value. A call that cannot be displayed safely is omitted with a warning. (BIJAN-166)
+- Documented redaction limits: Pi stores diagnostics added after `afterTool` unredacted. Stock compaction and
+  replay after protected extensions are deselected bypass the Responses payload guard.
+  [BIJAN-167](https://linear.app/kapitan/issue/BIJAN-167) tracks the Pi hook.
 
 Store: no schema or kit format change. Migration: none required.
 

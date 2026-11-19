@@ -175,14 +175,22 @@ export const myHarness = defineHarness({ name: "mine", secrets: ["TODOIST_API_TO
 `runCli` then exits 78 at startup, naming the variable, when one is unset or empty, instead of starting a session whose
 tool fails only when the model calls it. Galangan wraps tools in their installed extensions, so redaction follows
 the tools through helper recovery, forks and conversation configuration. The wrapper redacts live output, details
-and diagnostics before Pi receives them. A final tool hook redacts exact values in results, including diagnostic
-codes and handoffs. Masking does not add UTF-8 bytes or lines to visible tool text: it uses `[secret NAME]` when it fits
-and a shorter marker such as `*` otherwise. Diagnostics and other non-output fields still prefer the named marker.
+and diagnostics before Pi receives them. The `afterTool` hook redacts exact values in the results it receives,
+including diagnostic codes and handoffs. Masking does not add UTF-8 bytes or lines to visible tool text: it uses
+`[secret NAME]` when it fits and a shorter marker such as `*` otherwise. Diagnostics and other non-output fields
+still prefer the named marker.
 The shell strips terminal escapes and controls before masking live text, including across chunk boundaries. It also
 checks the joins used in stored diagnostic text and nested error summaries, and rechecks formatted Responses tool
 output before sending it. If masking cannot be done safely, the shell withholds text without changing the tool's
 success or error status and adds a warning outside the output budget when Pi's diagnostic framing allows it.
-Pi 1.5.2 can synthesize additional diagnostics after the result hook; the shell cannot change those before Pi stores them.
+
+Pi 1.5.2 stores diagnostics it adds after `afterTool` without Galangan redaction. The fixed truncation sentence poses
+negligible risk for a random token. Some late nested-tool errors include data-derived schema paths or bounded output
+text, where a match with a declared secret is possible.
+
+Stock compaction sends stored diagnostics to the summarizer without the provider payload guard. That guard only checks
+tool output in Responses requests during normal generation. If the protected extensions are deselected, the guard no
+longer checks tool results replayed from older history.
 
 A stream holds a possible secret prefix until it can match it and masks or withholds a remaining prefix when the
 tool throws or is interrupted. Returning a result preserves incomplete prefixes, including when it reports an error.

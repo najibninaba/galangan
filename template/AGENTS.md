@@ -47,8 +47,10 @@ has the upgrade steps.
 ### Secrets
 
 - Name every environment variable a tool needs, such as an API token, in `defineHarness({ secrets: [...] })`, and
-  read it from `process.env` in the tool. The CLI then exits 78 at startup when one is unset. The shell redacts
-  exact values before Pi stores them, using `[secret NAME]` or a shorter marker that fits the affected tool output.
+  read it from `process.env` in the tool. The CLI then exits 78 at startup when one is unset or empty. The shell masks
+  exact values in protected tool output and results through Pi's `afterTool` hook, using `[secret NAME]` or a shorter
+  marker that fits the output. Pi stores diagnostics added after that hook unredacted. See the secrets notes in the
+  [Galangan README](node_modules/galangan/README.md#build-a-harness) for compaction and history replay limits.
 - Redaction matches exact values: never put a secret in tool arguments or an encoded form such as
   base64. Keep values in the environment, never in code, docs or the store.
 - Amp project secrets reach only orbs of that project: run the harness live from a thread in its own project.

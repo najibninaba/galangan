@@ -3,6 +3,27 @@
 Each release says whether it migrates the store and gives a `Migration:` line for every change harness code must
 make. See [docs/pin-and-release-policy.md](docs/pin-and-release-policy.md) for release lines and how to upgrade.
 
+## 0.2.6 - 2026-11-19
+
+Opt-in transcript memory (BIJAN-139). Still on Pi Durable 1.5.2 and Effect 4.1.4.
+
+Store: no Pi migration; Pi stays at 1.5.2 (schema 2). The first open of a store stamped by 0.2.5 backs it up to
+`<store>.<UTC time>.bak` and restamps it. To roll back, restore the backup before opening it with 0.2.5.
+
+### Added
+
+- `memory()` from `galangan/kit/memory` adds `recall` and `zoom` over Pi's raw user and assistant history, including
+  inherited messages through a fork point and messages removed from active context by stock compaction. The tools
+  page their results and neither build summaries nor change compaction.
+- The extension's store format is `galangan.memory` **1**. When opting in, spread `memoryFormats` into the harness's
+  `formats` from the first install.
+
+Known limit: in harnesses that declare secrets, redaction can break references or continuations from either tool.
+It can rewrite call arguments even when the page fits, or expand a page past Pi's output limit and cut off its
+next-page line. [BIJAN-166](https://linear.app/kapitan/issue/BIJAN-166) tracks the shell fix.
+
+Migration: none required. Upgrade with `npm install --save-exact galangan@0.2.6`; memory is opt-in.
+
 ## 0.2.5 - 2026-11-18
 
 Secrets for harness tools (BIJAN-164, from kirim's `TODOIST_API_TOKEN`). Still on Pi Durable 1.5.2 and Effect 4.1.4.
